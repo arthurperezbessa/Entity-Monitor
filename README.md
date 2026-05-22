@@ -35,6 +35,9 @@ gerar um relatório com as entidades e integrações que mais caem.
      acompanhar (sensores, luzes, câmeras, dispositivos de qualquer integração).
    - **Limite do alerta curto (segundos)** — o `X segundos`. Padrão: `30`.
    - **Limite do alerta longo (minutos)** — o `X minutos`. Padrão: `5`.
+   - **Janela de quedas simultâneas (segundos)** — se várias entidades da
+     mesma integração caírem dentro dessa janela, contam como **1 evento**
+     (provavelmente o hub caiu). Padrão: `20`.
    - **Serviço de notificação** *(opcional)* — o serviço `notify.*` que vai
      receber os avisos (ex: `notify.mobile_app_meu_celular`). Deixe em branco
      para não enviar notificação automática (o evento ainda é disparado).
@@ -54,30 +57,45 @@ Um dispositivo **Entity Monitor** com as seguintes entidades:
 | `sensor.entity_monitor_total_downtime` | Tempo total offline (em minutos). |
 | `sensor.entity_monitor_downtime_report` | O relatório completo nos atributos: `worst_entities` e `worst_integrations`. |
 
+## Quedas simultâneas (coalescência)
+
+Quando um hub cai, dezenas de entidades da mesma integração ficam
+indisponíveis quase ao mesmo tempo. Isso **não** deve contar como dezenas de
+quedas — é **um único evento**.
+
+Por isso, quedas de entidades da mesma integração que acontecem dentro da
+**janela de quedas simultâneas** (padrão 20s) são agrupadas em um só evento de
+queda (*burst*). Esse evento único é o que conta tanto na notificação quanto
+no ranking de integrações do relatório. Exemplo: 30 entidades da `tuya` caem
+em 8 segundos → conta como **1 queda da integração tuya**, não 30.
+
+O tempo offline de **cada entidade** continua sendo registrado individualmente
+(você ainda vê quanto cada uma ficou fora no ranking por entidade).
+
 ## Notificações automáticas
 
 Se você preencher o **Serviço de notificação**, o Entity Monitor envia avisos
 sozinho — sem precisar criar automação. A lógica:
 
-- Quando uma entidade fica indisponível pela **primeira vez** (confirmada após
-  o limite de segundos), a notificação é enviada **na hora**.
+- Quando uma integração cai, o aviso é enviado logo após a janela de quedas
+  simultâneas fechar (assim ele já inclui todas as entidades que caíram juntas).
 - Se a mesma **integração** cair de novo, o aviso fica em silêncio durante o
   período configurado (**X horas**). As quedas continuam sendo contadas.
 - Passadas as X horas, a próxima queda dispara um novo aviso mostrando
-  **quantas vezes** aconteceu desde o último aviso.
+  **quantas vezes** a integração caiu desde o último aviso.
 
 O agrupamento é **uma linha por integração**, para não ser redundante:
 
 - Se só **uma entidade** da integração caiu:
-  `Luz Varanda ficou indisponível 5 vezes.`
-- Se **várias entidades** da mesma integração caíram (provavelmente o mesmo
-  hub): `Integração tuya: 3 entidades ficaram indisponíveis (15 quedas). ...`
+  `Luz Varanda ficou indisponível 3 vezes.`
+- Se **várias entidades** da mesma integração caíram juntas (mesmo hub):
+  `Integração tuya: 30 entidades caíram juntas. ...`
 - Integrações **diferentes** têm avisos separados — se o ar-condicionado e a
   luz da varanda caírem, você recebe um aviso de cada um.
 
 Cada aviso também dispara o evento `entity_monitor_notification` (campos:
-`integration`, `entity_ids`, `entity_names`, `occurrences`, `title`,
-`message`), caso você prefira tratá-lo numa automação própria.
+`integration`, `entity_ids`, `entity_names`, `outage_events`, `entity_count`,
+`title`, `message`), caso você prefira tratá-lo numa automação própria.
 
 ## Eventos disparados
 
@@ -127,9 +145,11 @@ atributos `worst_entities` (ranking por entidade) e `worst_integrations`
 **Ferramentas para Desenvolvedores → Serviços**, marque *retornar resposta*
 para ver o relatório na hora. Ele traz, ordenado da pior para a melhor:
 
-- `by_entity` — cada entidade com `outage_count` (nº de quedas),
+- `by_entity` — cada entidade com `outage_count` (nº de quedas da entidade),
   `total_downtime` (tempo total offline) e `longest_outage` (maior queda).
-- `by_integration` — o mesmo agregado por integração.
+- `by_integration` — por integração, com `outage_count` contando **eventos de
+  queda** (quedas simultâneas já agrupadas) e `total_downtime` do período em
+  que a integração esteve fora.
 
 Para zerar o histórico, chame o serviço `entity_monitor.reset_statistics`.
 
@@ -140,5 +160,6 @@ Para zerar o histórico, chame o serviço `entity_monitor.reset_statistics`.
 | `entities` | Lista de entidades monitoradas | — |
 | `seconds_threshold` | `X segundos` para o alerta curto | `30` |
 | `minutes_threshold` | `X minutos` para o alerta longo | `5` |
+| `coalesce_seconds` | Janela em que quedas simultâneas viram 1 evento | `20` |
 | `notify_service` | Serviço `notify.*` para os avisos automáticos (opcional) | — |
 | `renotify_hours` | Horas de silêncio antes de avisar a mesma integração | `1` |

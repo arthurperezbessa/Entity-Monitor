@@ -11,12 +11,14 @@ CONF_SECONDS_THRESHOLD = "seconds_threshold"
 CONF_MINUTES_THRESHOLD = "minutes_threshold"
 CONF_NOTIFY_SERVICE = "notify_service"
 CONF_RENOTIFY_HOURS = "renotify_hours"
+CONF_COALESCE_SECONDS = "coalesce_seconds"
 
 # Defaults
 DEFAULT_NAME = "Entity Monitor"
 DEFAULT_SECONDS_THRESHOLD = 30
 DEFAULT_MINUTES_THRESHOLD = 5
 DEFAULT_RENOTIFY_HOURS = 1
+DEFAULT_COALESCE_SECONDS = 20
 
 # Events fired on the Home Assistant bus
 EVENT_UNAVAILABLE = "entity_monitor_unavailable"

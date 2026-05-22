@@ -8,6 +8,7 @@
           "entities": "Entidades a monitorar",
           "seconds_threshold": "Limite do alerta curto (segundos)",
           "minutes_threshold": "Limite do alerta longo (minutos)",
+          "coalesce_seconds": "Janela para tratar quedas simultâneas como uma (segundos)",
           "notify_service": "Serviço de notificação (ex: notify.mobile_app_xxx) - opcional",
           "renotify_hours": "Esperar antes de notificar a mesma integração de novo (horas)"
         }
@@ -26,6 +27,7 @@
           "entities": "Entidades a monitorar",
           "seconds_threshold": "Limite do alerta curto (segundos)",
           "minutes_threshold": "Limite do alerta longo (minutos)",
+          "coalesce_seconds": "Janela para tratar quedas simultâneas como uma (segundos)",
           "notify_service": "Serviço de notificação (ex: notify.mobile_app_xxx) - opcional",
           "renotify_hours": "Esperar antes de notificar a mesma integração de novo (horas)"
         }
