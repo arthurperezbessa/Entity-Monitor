@@ -7,7 +7,9 @@
         "data": {
           "entities": "Entities to monitor",
           "seconds_threshold": "Short alert threshold (seconds)",
-          "minutes_threshold": "Long alert threshold (minutes)"
+          "minutes_threshold": "Long alert threshold (minutes)",
+          "notify_service": "Notify service (e.g. notify.mobile_app_xxx) - optional",
+          "renotify_hours": "Wait before notifying the same integration again (hours)"
         }
       }
     },
@@ -23,7 +25,9 @@
         "data": {
           "entities": "Entities to monitor",
           "seconds_threshold": "Short alert threshold (seconds)",
-          "minutes_threshold": "Long alert threshold (minutes)"
+          "minutes_threshold": "Long alert threshold (minutes)",
+          "notify_service": "Notify service (e.g. notify.mobile_app_xxx) - optional",
+          "renotify_hours": "Wait before notifying the same integration again (hours)"
         }
       }
     }

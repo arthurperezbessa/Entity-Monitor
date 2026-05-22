@@ -18,14 +18,18 @@ from homeassistant.helpers.selector import (
     NumberSelector,
     NumberSelectorConfig,
     NumberSelectorMode,
+    TextSelector,
 )
 
 from .const import (
     CONF_ENTITIES,
     CONF_MINUTES_THRESHOLD,
+    CONF_NOTIFY_SERVICE,
+    CONF_RENOTIFY_HOURS,
     CONF_SECONDS_THRESHOLD,
     DEFAULT_MINUTES_THRESHOLD,
     DEFAULT_NAME,
+    DEFAULT_RENOTIFY_HOURS,
     DEFAULT_SECONDS_THRESHOLD,
     DOMAIN,
 )
@@ -67,6 +71,24 @@ def _build_schema(defaults: dict[str, Any]) -> vol.Schema:
                     mode=NumberSelectorMode.BOX,
                 )
             ),
+            vol.Optional(
+                CONF_NOTIFY_SERVICE,
+                default=defaults.get(CONF_NOTIFY_SERVICE, ""),
+            ): TextSelector(),
+            vol.Required(
+                CONF_RENOTIFY_HOURS,
+                default=defaults.get(
+                    CONF_RENOTIFY_HOURS, DEFAULT_RENOTIFY_HOURS
+                ),
+            ): NumberSelector(
+                NumberSelectorConfig(
+                    min=1,
+                    max=168,
+                    step=1,
+                    unit_of_measurement="h",
+                    mode=NumberSelectorMode.BOX,
+                )
+            ),
         }
     )
 
@@ -77,6 +99,8 @@ def _normalise(user_input: dict[str, Any]) -> dict[str, Any]:
         CONF_ENTITIES: user_input[CONF_ENTITIES],
         CONF_SECONDS_THRESHOLD: int(user_input[CONF_SECONDS_THRESHOLD]),
         CONF_MINUTES_THRESHOLD: int(user_input[CONF_MINUTES_THRESHOLD]),
+        CONF_NOTIFY_SERVICE: user_input.get(CONF_NOTIFY_SERVICE, "").strip(),
+        CONF_RENOTIFY_HOURS: int(user_input[CONF_RENOTIFY_HOURS]),
     }
 
 

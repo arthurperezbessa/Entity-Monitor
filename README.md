@@ -35,8 +35,13 @@ gerar um relatório com as entidades e integrações que mais caem.
      acompanhar (sensores, luzes, câmeras, dispositivos de qualquer integração).
    - **Limite do alerta curto (segundos)** — o `X segundos`. Padrão: `30`.
    - **Limite do alerta longo (minutos)** — o `X minutos`. Padrão: `5`.
-4. Pronto. Você pode mudar a lista de entidades e os limites a qualquer momento
-   em **Configurar** na própria integração.
+   - **Serviço de notificação** *(opcional)* — o serviço `notify.*` que vai
+     receber os avisos (ex: `notify.mobile_app_meu_celular`). Deixe em branco
+     para não enviar notificação automática (o evento ainda é disparado).
+   - **Esperar para notificar de novo (horas)** — o intervalo de silêncio
+     antes de avisar outra vez sobre a mesma integração. Padrão: `1`.
+4. Pronto. Você pode mudar a lista de entidades, os limites e as notificações
+   a qualquer momento em **Configurar** na própria integração.
 
 ## O que é criado
 
@@ -48,6 +53,31 @@ Um dispositivo **Entity Monitor** com as seguintes entidades:
 | `sensor.entity_monitor_total_outages` | Número total de quedas registradas. |
 | `sensor.entity_monitor_total_downtime` | Tempo total offline (em minutos). |
 | `sensor.entity_monitor_downtime_report` | O relatório completo nos atributos: `worst_entities` e `worst_integrations`. |
+
+## Notificações automáticas
+
+Se você preencher o **Serviço de notificação**, o Entity Monitor envia avisos
+sozinho — sem precisar criar automação. A lógica:
+
+- Quando uma entidade fica indisponível pela **primeira vez** (confirmada após
+  o limite de segundos), a notificação é enviada **na hora**.
+- Se a mesma **integração** cair de novo, o aviso fica em silêncio durante o
+  período configurado (**X horas**). As quedas continuam sendo contadas.
+- Passadas as X horas, a próxima queda dispara um novo aviso mostrando
+  **quantas vezes** aconteceu desde o último aviso.
+
+O agrupamento é **uma linha por integração**, para não ser redundante:
+
+- Se só **uma entidade** da integração caiu:
+  `Luz Varanda ficou indisponível 5 vezes.`
+- Se **várias entidades** da mesma integração caíram (provavelmente o mesmo
+  hub): `Integração tuya: 3 entidades ficaram indisponíveis (15 quedas). ...`
+- Integrações **diferentes** têm avisos separados — se o ar-condicionado e a
+  luz da varanda caírem, você recebe um aviso de cada um.
+
+Cada aviso também dispara o evento `entity_monitor_notification` (campos:
+`integration`, `entity_ids`, `entity_names`, `occurrences`, `title`,
+`message`), caso você prefira tratá-lo numa automação própria.
 
 ## Eventos disparados
 
@@ -110,3 +140,5 @@ Para zerar o histórico, chame o serviço `entity_monitor.reset_statistics`.
 | `entities` | Lista de entidades monitoradas | — |
 | `seconds_threshold` | `X segundos` para o alerta curto | `30` |
 | `minutes_threshold` | `X minutos` para o alerta longo | `5` |
+| `notify_service` | Serviço `notify.*` para os avisos automáticos (opcional) | — |
+| `renotify_hours` | Horas de silêncio antes de avisar a mesma integração | `1` |

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from functools import partial
 
 from homeassistant.config_entries import ConfigEntry
@@ -22,10 +22,14 @@ from homeassistant.util import dt as dt_util
 from .const import (
     CONF_ENTITIES,
     CONF_MINUTES_THRESHOLD,
+    CONF_NOTIFY_SERVICE,
+    CONF_RENOTIFY_HOURS,
     CONF_SECONDS_THRESHOLD,
     DEFAULT_MINUTES_THRESHOLD,
+    DEFAULT_RENOTIFY_HOURS,
     DEFAULT_SECONDS_THRESHOLD,
     DOMAIN,
+    EVENT_NOTIFICATION,
     EVENT_RECOVERED,
     EVENT_UNAVAILABLE,
     LEVEL_MINUTES,
@@ -103,6 +107,10 @@ class EntityMonitor:
         self.stats: dict[str, EntityStats] = {}
         self._ongoing: dict[str, OngoingOutage] = {}
         self._unsub_state: CALLBACK_TYPE | None = None
+        # Notification bookkeeping, keyed by integration. Not persisted: a
+        # restart simply allows the next outage to notify again.
+        self._occurrences: dict[str, list[dict]] = {}
+        self._last_notified: dict[str, datetime] = {}
         self._store: Store = Store(
             hass, STORAGE_VERSION, f"{DOMAIN}.{entry.entry_id}"
         )
@@ -129,6 +137,20 @@ class EntityMonitor:
         return int(
             self.entry.options.get(
                 CONF_MINUTES_THRESHOLD, DEFAULT_MINUTES_THRESHOLD
+            )
+        )
+
+    @property
+    def notify_service(self) -> str:
+        """Return the notify service to call, e.g. ``notify.mobile_app_x``."""
+        return str(self.entry.options.get(CONF_NOTIFY_SERVICE, "")).strip()
+
+    @property
+    def renotify_hours(self) -> int:
+        """Return how many hours to wait before notifying again."""
+        return int(
+            self.entry.options.get(
+                CONF_RENOTIFY_HOURS, DEFAULT_RENOTIFY_HOURS
             )
         )
 
@@ -255,6 +277,10 @@ class EntityMonitor:
             format_duration(threshold),
             level,
         )
+        # Treat the seconds threshold as the "confirmed offline" moment and
+        # evaluate whether a notification should be sent for the integration.
+        if level == LEVEL_SECONDS:
+            self._record_and_notify(entity_id)
         async_dispatcher_send(self.hass, SIGNAL_UPDATE)
 
     @callback
@@ -293,6 +319,104 @@ class EntityMonitor:
         )
         self._store.async_delay_save(self._data_for_storage, 10)
         async_dispatcher_send(self.hass, SIGNAL_UPDATE)
+
+    # -- Notifications ---------------------------------------------------------
+
+    @callback
+    def _record_and_notify(self, entity_id: str) -> None:
+        """Record a confirmed outage and notify if the integration is due."""
+        integration = self._integration_of(entity_id)
+        now = dt_util.utcnow()
+        self._occurrences.setdefault(integration, []).append(
+            {"entity_id": entity_id, "time": now}
+        )
+
+        last = self._last_notified.get(integration)
+        if last is not None and now < last + timedelta(
+            hours=self.renotify_hours
+        ):
+            # Still within the cooldown for this integration: count only.
+            _LOGGER.debug(
+                "Notification for %s suppressed (cooldown active)",
+                integration,
+            )
+            return
+
+        self._notify_integration(integration, now)
+
+    @callback
+    def _notify_integration(self, integration: str, now: datetime) -> None:
+        """Send a single grouped notification for one integration."""
+        last = self._last_notified.get(integration)
+        occurrences = self._occurrences.get(integration, [])
+        pending = [
+            o for o in occurrences if last is None or o["time"] > last
+        ]
+        if not pending:
+            return
+
+        entity_ids = list(dict.fromkeys(o["entity_id"] for o in pending))
+        total = len(pending)
+        title, message = self._build_message(integration, entity_ids, total)
+
+        self.hass.bus.async_fire(
+            EVENT_NOTIFICATION,
+            {
+                "integration": integration,
+                "entity_ids": entity_ids,
+                "entity_names": [
+                    self._friendly_name(eid) for eid in entity_ids
+                ],
+                "occurrences": total,
+                "title": title,
+                "message": message,
+            },
+        )
+        self._send_notification(title, message)
+
+        self._last_notified[integration] = now
+        self._occurrences[integration] = []
+        _LOGGER.info("Entity Monitor notification: %s", message)
+
+    def _build_message(
+        self, integration: str, entity_ids: list[str], total: int
+    ) -> tuple[str, str]:
+        """Build the notification title and body (one line per integration)."""
+        if len(entity_ids) == 1:
+            name = self._friendly_name(entity_ids[0])
+            if total == 1:
+                message = f"{name} ficou indisponível."
+            else:
+                message = f"{name} ficou indisponível {total} vezes."
+            return "Entidade indisponível", message
+
+        names = ", ".join(self._friendly_name(eid) for eid in entity_ids)
+        message = (
+            f"Integração {integration}: {len(entity_ids)} entidades ficaram "
+            f"indisponíveis ({total} quedas). {names}."
+        )
+        return f"Integração {integration} instável", message
+
+    @callback
+    def _send_notification(self, title: str, message: str) -> None:
+        """Call the configured notify service, if any."""
+        service = self.notify_service
+        if not service:
+            return
+
+        if "." in service:
+            domain, name = service.split(".", 1)
+        else:
+            domain, name = "notify", service
+
+        self.hass.async_create_task(
+            self.hass.services.async_call(
+                domain,
+                name,
+                {"title": title, "message": message},
+                blocking=False,
+            )
+        )
 
     # -- Statistics / reporting ------------------------------------------------
 
