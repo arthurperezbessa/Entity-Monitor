@@ -1,0 +1,41 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Entity Monitor",
+        "description": "Escolha as entidades que deseja monitorar e por quanto tempo elas podem ficar indisponíveis antes de disparar um alerta.",
+        "data": {
+          "entities": "Entidades a monitorar",
+          "seconds_threshold": "Limite do alerta curto (segundos)",
+          "minutes_threshold": "Limite do alerta longo (minutos)"
+        }
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "O Entity Monitor já está configurado."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Entity Monitor",
+        "description": "Atualize as entidades monitoradas e os limites de alerta.",
+        "data": {
+          "entities": "Entidades a monitorar",
+          "seconds_threshold": "Limite do alerta curto (segundos)",
+          "minutes_threshold": "Limite do alerta longo (minutos)"
+        }
+      }
+    }
+  },
+  "services": {
+    "generate_report": {
+      "name": "Gerar relatório",
+      "description": "Gera um relatório de indisponibilidade ranqueando as entidades e integrações que mais ficam offline."
+    },
+    "reset_statistics": {
+      "name": "Zerar estatísticas",
+      "description": "Limpa todos os contadores de quedas e o tempo total offline armazenados."
+    }
+  }
+}

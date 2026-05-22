@@ -1,0 +1,12 @@
+generate_report:
+  name: Generate report
+  description: >-
+    Build a downtime report ranking the entities and integrations that go
+    offline the most, with the number of outages and accumulated downtime.
+    Call it with "return response" to receive the report inline.
+
+reset_statistics:
+  name: Reset statistics
+  description: >-
+    Clear all stored outage counters and downtime totals. Entities that are
+    currently unavailable keep their ongoing outage.

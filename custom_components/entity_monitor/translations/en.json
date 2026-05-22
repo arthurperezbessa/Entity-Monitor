@@ -1,0 +1,41 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Entity Monitor",
+        "description": "Choose the entities you want to watch and how long they may stay unavailable before an alert is fired.",
+        "data": {
+          "entities": "Entities to monitor",
+          "seconds_threshold": "Short alert threshold (seconds)",
+          "minutes_threshold": "Long alert threshold (minutes)"
+        }
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Entity Monitor is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Entity Monitor",
+        "description": "Update the monitored entities and the alert thresholds.",
+        "data": {
+          "entities": "Entities to monitor",
+          "seconds_threshold": "Short alert threshold (seconds)",
+          "minutes_threshold": "Long alert threshold (minutes)"
+        }
+      }
+    }
+  },
+  "services": {
+    "generate_report": {
+      "name": "Generate report",
+      "description": "Build a downtime report ranking the entities and integrations that go offline the most."
+    },
+    "reset_statistics": {
+      "name": "Reset statistics",
+      "description": "Clear all stored outage counters and downtime totals."
+    }
+  }
+}

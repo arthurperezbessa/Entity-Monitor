@@ -1,0 +1,12 @@
+{
+  "domain": "entity_monitor",
+  "name": "Entity Monitor",
+  "codeowners": ["@arthurperezbessa"],
+  "config_flow": true,
+  "documentation": "https://github.com/arthurperezbessa/Entity-Monitor",
+  "integration_type": "helper",
+  "iot_class": "calculated",
+  "issue_tracker": "https://github.com/arthurperezbessa/Entity-Monitor/issues",
+  "requirements": [],
+  "version": "1.0.0"
+}
