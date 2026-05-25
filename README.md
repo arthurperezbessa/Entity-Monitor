@@ -66,6 +66,7 @@ Um dispositivo **Entity Monitor** com as seguintes entidades:
 | `sensor.entity_monitor_total_outages` | Número total de quedas registradas. |
 | `sensor.entity_monitor_total_downtime` | Tempo total offline (em minutos). |
 | `sensor.entity_monitor_downtime_report` | O relatório completo nos atributos: `worst_entities` e `worst_integrations`. |
+| `button.entity_monitor_test_notification` | Aperte para disparar uma notificação de teste pelo serviço configurado. |
 
 ## Quedas simultâneas (coalescência)
 
@@ -106,6 +107,19 @@ O agrupamento é **uma linha por integração**, para não ser redundante:
 Cada aviso também dispara o evento `entity_monitor_notification` (campos:
 `integration`, `entity_ids`, `entity_names`, `outage_events`, `entity_count`,
 `title`, `message`), caso você prefira tratá-lo numa automação própria.
+
+### Testar a notificação
+
+Para conferir se o serviço está configurado certo, use uma das duas formas:
+
+- **Botão** — abra o device *Entity Monitor* e clique em **Testar notificação**
+  (`button.entity_monitor_test_notification`).
+- **Serviço** — chame `entity_monitor.test_notification` em
+  *Ferramentas para Desenvolvedores → Serviços*.
+
+Em ambos os casos, uma notificação de exemplo cai no celular (se houver
+serviço configurado) e o evento `entity_monitor_notification` é disparado
+com `test: true`, para você poder filtrar em automações.
 
 ## Eventos disparados
 

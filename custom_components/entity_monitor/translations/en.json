@@ -52,6 +52,17 @@
     "reset_statistics": {
       "name": "Reset statistics",
       "description": "Clear all stored outage counters and downtime totals."
+    },
+    "test_notification": {
+      "name": "Send test notification",
+      "description": "Fire a sample notification so you can confirm the notify service is set up correctly."
+    }
+  },
+  "entity": {
+    "button": {
+      "test_notification": {
+        "name": "Test notification"
+      }
     }
   }
 }

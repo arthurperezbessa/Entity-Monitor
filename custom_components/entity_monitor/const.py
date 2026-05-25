@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 DOMAIN = "entity_monitor"
-PLATFORMS = ["binary_sensor", "sensor"]
+PLATFORMS = ["binary_sensor", "button", "sensor"]
 
 # Configuration keys
 CONF_ENTITIES = "entities"
@@ -61,6 +61,7 @@ SIGNAL_UPDATE = "entity_monitor_update"
 # Services
 SERVICE_GENERATE_REPORT = "generate_report"
 SERVICE_RESET_STATISTICS = "reset_statistics"
+SERVICE_TEST_NOTIFICATION = "test_notification"
 
 # Storage
 STORAGE_VERSION = 1

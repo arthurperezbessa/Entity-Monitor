@@ -655,6 +655,40 @@ class EntityMonitor:
         return f"{shown} e mais {len(names) - _MAX_NAMES_IN_MESSAGE}"
 
     @callback
+    def async_send_test_notification(self) -> bool:
+        """Fire a sample notification so the user can validate the setup.
+
+        Returns whether the configured notify service was invoked.
+        """
+        title = "Entity Monitor — teste"
+        message = (
+            "Notificação de teste do Entity Monitor. Se você está vendo "
+            "isto, o serviço de notificação está configurado corretamente."
+        )
+        self.hass.bus.async_fire(
+            EVENT_NOTIFICATION,
+            {
+                "integration": "_test_",
+                "entity_ids": [],
+                "entity_names": [],
+                "outage_events": 0,
+                "entity_count": 0,
+                "title": title,
+                "message": message,
+                "test": True,
+            },
+        )
+        if not self.notify_service:
+            _LOGGER.warning(
+                "Test notification requested but no notify_service is "
+                "configured — only the entity_monitor_notification event "
+                "was fired."
+            )
+            return False
+        self._send_notification(title, message)
+        return True
+
+    @callback
     def _send_notification(self, title: str, message: str) -> None:
         """Call the configured notify service, if any."""
         service = self.notify_service

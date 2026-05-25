@@ -17,6 +17,7 @@ from .const import (
     EVENT_REPORT,
     SERVICE_GENERATE_REPORT,
     SERVICE_RESET_STATISTICS,
+    SERVICE_TEST_NOTIFICATION,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -46,6 +47,11 @@ def async_setup_services(hass: HomeAssistant) -> None:
         for monitor in hass.data.get(DOMAIN, {}).values():
             monitor.async_reset_statistics()
 
+    async def _test_notification(call: ServiceCall) -> None:
+        """Send a sample notification through every configured monitor."""
+        for monitor in hass.data.get(DOMAIN, {}).values():
+            monitor.async_send_test_notification()
+
     if not hass.services.has_service(DOMAIN, SERVICE_GENERATE_REPORT):
         hass.services.async_register(
             DOMAIN,
@@ -59,9 +65,15 @@ def async_setup_services(hass: HomeAssistant) -> None:
             DOMAIN, SERVICE_RESET_STATISTICS, _reset_statistics
         )
 
+    if not hass.services.has_service(DOMAIN, SERVICE_TEST_NOTIFICATION):
+        hass.services.async_register(
+            DOMAIN, SERVICE_TEST_NOTIFICATION, _test_notification
+        )
+
 
 @callback
 def async_unload_services(hass: HomeAssistant) -> None:
     """Remove the integration services."""
     hass.services.async_remove(DOMAIN, SERVICE_GENERATE_REPORT)
     hass.services.async_remove(DOMAIN, SERVICE_RESET_STATISTICS)
+    hass.services.async_remove(DOMAIN, SERVICE_TEST_NOTIFICATION)

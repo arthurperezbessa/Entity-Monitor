@@ -10,3 +10,10 @@ reset_statistics:
   description: >-
     Clear all stored outage counters and downtime totals. Entities that are
     currently unavailable keep their ongoing outage.
+
+test_notification:
+  name: Send test notification
+  description: >-
+    Fire a sample notification through the configured notify service so
+    you can verify the setup. Also fires the entity_monitor_notification
+    event with a "test: true" flag.

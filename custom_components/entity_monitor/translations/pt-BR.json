@@ -52,6 +52,17 @@
     "reset_statistics": {
       "name": "Resetar estatísticas",
       "description": "Apaga todos os contadores de quedas e somas de tempo offline."
+    },
+    "test_notification": {
+      "name": "Enviar notificação de teste",
+      "description": "Dispara uma notificação de exemplo para você confirmar que o serviço de notificação está configurado certo."
+    }
+  },
+  "entity": {
+    "button": {
+      "test_notification": {
+        "name": "Testar notificação"
+      }
     }
   }
 }
