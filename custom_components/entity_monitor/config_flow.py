@@ -27,6 +27,7 @@ from homeassistant.helpers.selector import (
 )
 
 from .const import (
+    CONF_AUTO_RESET_DAYS,
     CONF_COALESCE_SECONDS,
     CONF_ENTITIES,
     CONF_INTEGRATIONS,
@@ -35,6 +36,7 @@ from .const import (
     CONF_ONLY_PRIMARY,
     CONF_RENOTIFY_HOURS,
     CONF_SECONDS_THRESHOLD,
+    DEFAULT_AUTO_RESET_DAYS,
     DEFAULT_COALESCE_SECONDS,
     DEFAULT_MINUTES_THRESHOLD,
     DEFAULT_NAME,
@@ -139,6 +141,20 @@ def _build_schema(
                     mode=NumberSelectorMode.BOX,
                 )
             ),
+            vol.Required(
+                CONF_AUTO_RESET_DAYS,
+                default=defaults.get(
+                    CONF_AUTO_RESET_DAYS, DEFAULT_AUTO_RESET_DAYS
+                ),
+            ): NumberSelector(
+                NumberSelectorConfig(
+                    min=0,
+                    max=365,
+                    step=1,
+                    unit_of_measurement="d",
+                    mode=NumberSelectorMode.BOX,
+                )
+            ),
         }
     )
 
@@ -156,6 +172,9 @@ def _normalise(user_input: dict[str, Any]) -> dict[str, Any]:
         CONF_COALESCE_SECONDS: int(user_input[CONF_COALESCE_SECONDS]),
         CONF_NOTIFY_SERVICE: user_input.get(CONF_NOTIFY_SERVICE, "").strip(),
         CONF_RENOTIFY_HOURS: int(user_input[CONF_RENOTIFY_HOURS]),
+        CONF_AUTO_RESET_DAYS: int(
+            user_input.get(CONF_AUTO_RESET_DAYS, DEFAULT_AUTO_RESET_DAYS)
+        ),
     }
 
 

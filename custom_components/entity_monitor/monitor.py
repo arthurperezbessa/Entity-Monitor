@@ -20,6 +20,7 @@ from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    CONF_AUTO_RESET_DAYS,
     CONF_COALESCE_SECONDS,
     CONF_ENTITIES,
     CONF_INTEGRATIONS,
@@ -28,6 +29,7 @@ from .const import (
     CONF_ONLY_PRIMARY,
     CONF_RENOTIFY_HOURS,
     CONF_SECONDS_THRESHOLD,
+    DEFAULT_AUTO_RESET_DAYS,
     DEFAULT_COALESCE_SECONDS,
     DEFAULT_MINUTES_THRESHOLD,
     DEFAULT_ONLY_PRIMARY,
@@ -172,6 +174,8 @@ class EntityMonitor:
         self._entity_burst: dict[str, IntegrationBurst] = {}
         self._last_notified: dict[str, datetime] = {}
         self._flush_timers: dict[str, CALLBACK_TYPE] = {}
+        self._last_reset_at: datetime | None = None
+        self._auto_reset_cancel: CALLBACK_TYPE | None = None
         self._store: Store = Store(
             hass, STORAGE_VERSION, f"{DOMAIN}.{entry.entry_id}"
         )
@@ -236,6 +240,20 @@ class EntityMonitor:
             )
         )
 
+    @property
+    def auto_reset_days(self) -> int:
+        """Return after how many days statistics auto-reset (0 = never)."""
+        return int(
+            self.entry.options.get(
+                CONF_AUTO_RESET_DAYS, DEFAULT_AUTO_RESET_DAYS
+            )
+        )
+
+    @property
+    def last_reset_at(self) -> datetime | None:
+        """Return when statistics were last cleared (if ever)."""
+        return self._last_reset_at
+
     # -- Public state ----------------------------------------------------------
 
     @property
@@ -270,6 +288,11 @@ class EntityMonitor:
                 integration: IntegrationStats.from_dict(raw)
                 for integration, raw in data["integration_stats"].items()
             }
+        last_reset = data.get("last_reset_at")
+        if last_reset:
+            parsed = dt_util.parse_datetime(last_reset)
+            if parsed is not None:
+                self._last_reset_at = parsed
 
     async def async_start(self) -> None:
         """Begin watching the configured entities."""
@@ -287,6 +310,8 @@ class EntityMonitor:
             state = self.hass.states.get(eid)
             if state is not None and state.state == STATE_UNAVAILABLE:
                 self._start_outage(eid)
+
+        self._schedule_auto_reset()
 
     def _resolved_entities(self) -> list[str]:
         """Expand integrations + explicit entities into the watch list."""
@@ -368,6 +393,9 @@ class EntityMonitor:
         for cancel in self._flush_timers.values():
             cancel()
         self._flush_timers.clear()
+        if self._auto_reset_cancel is not None:
+            self._auto_reset_cancel()
+            self._auto_reset_cancel = None
 
     # -- State change handling -------------------------------------------------
 
@@ -719,9 +747,51 @@ class EntityMonitor:
         self.integration_stats.clear()
         self._bursts.clear()
         self._entity_burst.clear()
+        self._last_reset_at = dt_util.utcnow()
         self._store.async_delay_save(self._data_for_storage, 1)
         async_dispatcher_send(self.hass, SIGNAL_UPDATE)
         _LOGGER.info("Entity Monitor statistics reset")
+        # Restart the auto-reset countdown from this moment.
+        self._schedule_auto_reset()
+
+    @callback
+    def _schedule_auto_reset(self) -> None:
+        """(Re)schedule the next periodic reset, if enabled."""
+        if self._auto_reset_cancel is not None:
+            self._auto_reset_cancel()
+            self._auto_reset_cancel = None
+
+        days = self.auto_reset_days
+        if days <= 0:
+            return
+
+        period = timedelta(days=days)
+        now = dt_util.utcnow()
+        if self._last_reset_at is None:
+            # First time we see this period: anchor it to now so users get a
+            # full window before the first auto-reset.
+            self._last_reset_at = now
+            self._store.async_delay_save(self._data_for_storage, 1)
+
+        next_at = self._last_reset_at + period
+        if next_at <= now:
+            # The window already elapsed (e.g. HA was off): reset right away.
+            self.async_reset_statistics()
+            return
+
+        delay = (next_at - now).total_seconds()
+        self._auto_reset_cancel = async_call_later(
+            self.hass, delay, self._auto_reset_fire
+        )
+
+    @callback
+    def _auto_reset_fire(self, _now: datetime) -> None:
+        """Callback fired by async_call_later when the period elapses."""
+        self._auto_reset_cancel = None
+        _LOGGER.info(
+            "Entity Monitor auto-reset after %s days", self.auto_reset_days
+        )
+        self.async_reset_statistics()
 
     def build_report(self) -> dict:
         """Build a report ranking entities and integrations by downtime."""
@@ -770,6 +840,12 @@ class EntityMonitor:
             "seconds_threshold": self.seconds_threshold,
             "minutes_threshold": self.minutes_threshold,
             "coalesce_seconds": self.coalesce_seconds,
+            "auto_reset_days": self.auto_reset_days,
+            "last_reset_at": (
+                self._last_reset_at.isoformat()
+                if self._last_reset_at is not None
+                else None
+            ),
             "by_entity": by_entity,
             "by_integration": by_integration,
         }
@@ -823,6 +899,11 @@ class EntityMonitor:
                 integration: s.as_dict()
                 for integration, s in self.integration_stats.items()
             },
+            "last_reset_at": (
+                self._last_reset_at.isoformat()
+                if self._last_reset_at is not None
+                else None
+            ),
         }
 
     def _friendly_name(self, entity_id: str) -> str:

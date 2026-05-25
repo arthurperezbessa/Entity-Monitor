@@ -12,7 +12,8 @@
           "minutes_threshold": "Long alert threshold (minutes)",
           "coalesce_seconds": "Window to treat simultaneous drops as one (seconds)",
           "notify_service": "Notify service (e.g. notify.mobile_app_xxx) - optional",
-          "renotify_hours": "Wait before notifying the same integration again (hours)"
+          "renotify_hours": "Wait before notifying the same integration again (hours)",
+          "auto_reset_days": "Auto-reset statistics every N days (0 = never)"
         }
       }
     },
@@ -36,7 +37,8 @@
           "minutes_threshold": "Long alert threshold (minutes)",
           "coalesce_seconds": "Window to treat simultaneous drops as one (seconds)",
           "notify_service": "Notify service (e.g. notify.mobile_app_xxx) - optional",
-          "renotify_hours": "Wait before notifying the same integration again (hours)"
+          "renotify_hours": "Wait before notifying the same integration again (hours)",
+          "auto_reset_days": "Auto-reset statistics every N days (0 = never)"
         }
       }
     },

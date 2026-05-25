@@ -14,6 +14,7 @@ CONF_MINUTES_THRESHOLD = "minutes_threshold"
 CONF_NOTIFY_SERVICE = "notify_service"
 CONF_RENOTIFY_HOURS = "renotify_hours"
 CONF_COALESCE_SECONDS = "coalesce_seconds"
+CONF_AUTO_RESET_DAYS = "auto_reset_days"
 
 # Defaults
 DEFAULT_NAME = "Entity Monitor"
@@ -22,6 +23,7 @@ DEFAULT_MINUTES_THRESHOLD = 5
 DEFAULT_RENOTIFY_HOURS = 1
 DEFAULT_COALESCE_SECONDS = 20
 DEFAULT_ONLY_PRIMARY = True
+DEFAULT_AUTO_RESET_DAYS = 30
 
 # Domains preferred when picking the "primary" entity of a device.
 # Order matters: earlier = higher priority.

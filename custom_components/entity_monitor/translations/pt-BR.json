@@ -12,7 +12,8 @@
           "minutes_threshold": "Limite do alerta longo (minutos)",
           "coalesce_seconds": "Janela para tratar quedas simultâneas como uma (segundos)",
           "notify_service": "Serviço de notificação (ex: notify.mobile_app_xxx) - opcional",
-          "renotify_hours": "Esperar antes de notificar a mesma integração de novo (horas)"
+          "renotify_hours": "Esperar antes de notificar a mesma integração de novo (horas)",
+          "auto_reset_days": "Zerar estatísticas a cada N dias (0 = nunca)"
         }
       }
     },
@@ -36,7 +37,8 @@
           "minutes_threshold": "Limite do alerta longo (minutos)",
           "coalesce_seconds": "Janela para tratar quedas simultâneas como uma (segundos)",
           "notify_service": "Serviço de notificação (ex: notify.mobile_app_xxx) - opcional",
-          "renotify_hours": "Esperar antes de notificar a mesma integração de novo (horas)"
+          "renotify_hours": "Esperar antes de notificar a mesma integração de novo (horas)",
+          "auto_reset_days": "Zerar estatísticas a cada N dias (0 = nunca)"
         }
       }
     },

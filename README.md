@@ -175,7 +175,14 @@ para ver o relatório na hora. Ele traz, ordenado da pior para a melhor:
   queda** (quedas simultâneas já agrupadas) e `total_downtime` do período em
   que a integração esteve fora.
 
-Para zerar o histórico, chame o serviço `entity_monitor.reset_statistics`.
+Para zerar o histórico:
+
+- **Manualmente** — chame o serviço `entity_monitor.reset_statistics` ou rode
+  a partir de uma automação.
+- **Automaticamente** — a cada `auto_reset_days` dias (padrão 30) o
+  Entity Monitor zera os contadores sozinho, dando uma janela móvel.
+  Coloque `0` para desligar. O relatório inclui `last_reset_at` mostrando
+  quando foi o último reset.
 
 ## Configuração
 
@@ -189,3 +196,4 @@ Para zerar o histórico, chame o serviço `entity_monitor.reset_statistics`.
 | `coalesce_seconds` | Janela em que quedas simultâneas viram 1 evento | `20` |
 | `notify_service` | Serviço `notify.*` para os avisos automáticos (opcional) | — |
 | `renotify_hours` | Horas de silêncio antes de avisar a mesma integração | `1` |
+| `auto_reset_days` | Zera as estatísticas a cada N dias (`0` desliga) | `30` |
