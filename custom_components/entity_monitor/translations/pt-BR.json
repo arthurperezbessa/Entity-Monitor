@@ -3,9 +3,11 @@
     "step": {
       "user": {
         "title": "Entity Monitor",
-        "description": "Escolha as entidades que deseja monitorar e por quanto tempo elas podem ficar indisponíveis antes de disparar um alerta.",
+        "description": "Escolha integrações inteiras e/ou entidades específicas para monitorar, e por quanto tempo elas podem ficar indisponíveis antes de disparar um alerta.",
         "data": {
-          "entities": "Entidades a monitorar",
+          "integrations": "Integrações para monitorar (todas as entidades delas)",
+          "only_primary_entity": "Monitorar só a entidade principal de cada dispositivo",
+          "entities": "Entidades extras para monitorar (individuais)",
           "seconds_threshold": "Limite do alerta curto (segundos)",
           "minutes_threshold": "Limite do alerta longo (minutos)",
           "coalesce_seconds": "Janela para tratar quedas simultâneas como uma (segundos)",
@@ -13,6 +15,9 @@
           "renotify_hours": "Esperar antes de notificar a mesma integração de novo (horas)"
         }
       }
+    },
+    "error": {
+      "nothing_selected": "Escolha pelo menos uma integração ou uma entidade."
     },
     "abort": {
       "single_instance_allowed": "O Entity Monitor já está configurado."
@@ -22,9 +27,11 @@
     "step": {
       "init": {
         "title": "Entity Monitor",
-        "description": "Atualize as entidades monitoradas e os limites de alerta.",
+        "description": "Atualize as integrações, entidades monitoradas e os limites de alerta.",
         "data": {
-          "entities": "Entidades a monitorar",
+          "integrations": "Integrações para monitorar (todas as entidades delas)",
+          "only_primary_entity": "Monitorar só a entidade principal de cada dispositivo",
+          "entities": "Entidades extras para monitorar (individuais)",
           "seconds_threshold": "Limite do alerta curto (segundos)",
           "minutes_threshold": "Limite do alerta longo (minutos)",
           "coalesce_seconds": "Janela para tratar quedas simultâneas como uma (segundos)",
@@ -32,16 +39,19 @@
           "renotify_hours": "Esperar antes de notificar a mesma integração de novo (horas)"
         }
       }
+    },
+    "error": {
+      "nothing_selected": "Escolha pelo menos uma integração ou uma entidade."
     }
   },
   "services": {
     "generate_report": {
       "name": "Gerar relatório",
-      "description": "Gera um relatório de indisponibilidade ranqueando as entidades e integrações que mais ficam offline."
+      "description": "Cria um relatório de quedas com as entidades e integrações que mais ficaram offline."
     },
     "reset_statistics": {
-      "name": "Zerar estatísticas",
-      "description": "Limpa todos os contadores de quedas e o tempo total offline armazenados."
+      "name": "Resetar estatísticas",
+      "description": "Apaga todos os contadores de quedas e somas de tempo offline."
     }
   }
 }

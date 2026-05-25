@@ -11,37 +11,71 @@ from homeassistant.config_entries import (
     ConfigFlowResult,
     OptionsFlow,
 )
-from homeassistant.core import callback
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.selector import (
+    BooleanSelector,
     EntitySelector,
     EntitySelectorConfig,
     NumberSelector,
     NumberSelectorConfig,
     NumberSelectorMode,
+    SelectSelector,
+    SelectSelectorConfig,
+    SelectSelectorMode,
     TextSelector,
 )
 
 from .const import (
     CONF_COALESCE_SECONDS,
     CONF_ENTITIES,
+    CONF_INTEGRATIONS,
     CONF_MINUTES_THRESHOLD,
     CONF_NOTIFY_SERVICE,
+    CONF_ONLY_PRIMARY,
     CONF_RENOTIFY_HOURS,
     CONF_SECONDS_THRESHOLD,
     DEFAULT_COALESCE_SECONDS,
     DEFAULT_MINUTES_THRESHOLD,
     DEFAULT_NAME,
+    DEFAULT_ONLY_PRIMARY,
     DEFAULT_RENOTIFY_HOURS,
     DEFAULT_SECONDS_THRESHOLD,
     DOMAIN,
 )
 
 
-def _build_schema(defaults: dict[str, Any]) -> vol.Schema:
+def _available_integrations(hass: HomeAssistant) -> list[str]:
+    """Return platforms that currently have entities registered."""
+    registry = er.async_get(hass)
+    return sorted({entry.platform for entry in registry.entities.values()})
+
+
+def _build_schema(
+    hass: HomeAssistant, defaults: dict[str, Any]
+) -> vol.Schema:
     """Return the form schema, pre-filled with the given defaults."""
+    integrations = _available_integrations(hass)
     return vol.Schema(
         {
-            vol.Required(
+            vol.Optional(
+                CONF_INTEGRATIONS,
+                default=defaults.get(CONF_INTEGRATIONS, []),
+            ): SelectSelector(
+                SelectSelectorConfig(
+                    options=integrations,
+                    multiple=True,
+                    custom_value=True,
+                    mode=SelectSelectorMode.DROPDOWN,
+                )
+            ),
+            vol.Optional(
+                CONF_ONLY_PRIMARY,
+                default=defaults.get(
+                    CONF_ONLY_PRIMARY, DEFAULT_ONLY_PRIMARY
+                ),
+            ): BooleanSelector(),
+            vol.Optional(
                 CONF_ENTITIES,
                 default=defaults.get(CONF_ENTITIES, []),
             ): EntitySelector(EntitySelectorConfig(multiple=True)),
@@ -110,15 +144,28 @@ def _build_schema(defaults: dict[str, Any]) -> vol.Schema:
 
 
 def _normalise(user_input: dict[str, Any]) -> dict[str, Any]:
-    """Coerce the numeric selector values to integers."""
+    """Coerce the form values to their final types."""
     return {
-        CONF_ENTITIES: user_input[CONF_ENTITIES],
+        CONF_ENTITIES: user_input.get(CONF_ENTITIES, []),
+        CONF_INTEGRATIONS: user_input.get(CONF_INTEGRATIONS, []),
+        CONF_ONLY_PRIMARY: bool(
+            user_input.get(CONF_ONLY_PRIMARY, DEFAULT_ONLY_PRIMARY)
+        ),
         CONF_SECONDS_THRESHOLD: int(user_input[CONF_SECONDS_THRESHOLD]),
         CONF_MINUTES_THRESHOLD: int(user_input[CONF_MINUTES_THRESHOLD]),
         CONF_COALESCE_SECONDS: int(user_input[CONF_COALESCE_SECONDS]),
         CONF_NOTIFY_SERVICE: user_input.get(CONF_NOTIFY_SERVICE, "").strip(),
         CONF_RENOTIFY_HOURS: int(user_input[CONF_RENOTIFY_HOURS]),
     }
+
+
+def _validate(user_input: dict[str, Any]) -> dict[str, str]:
+    """Return a dict of field→error code for any invalid input."""
+    if not user_input.get(CONF_ENTITIES) and not user_input.get(
+        CONF_INTEGRATIONS
+    ):
+        return {"base": "nothing_selected"}
+    return {}
 
 
 class EntityMonitorConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -133,13 +180,20 @@ class EntityMonitorConfigFlow(ConfigFlow, domain=DOMAIN):
         if self._async_current_entries():
             return self.async_abort(reason="single_instance_allowed")
 
+        errors: dict[str, str] = {}
         if user_input is not None:
-            return self.async_create_entry(
-                title=DEFAULT_NAME, data={}, options=_normalise(user_input)
-            )
+            errors = _validate(user_input)
+            if not errors:
+                return self.async_create_entry(
+                    title=DEFAULT_NAME,
+                    data={},
+                    options=_normalise(user_input),
+                )
 
         return self.async_show_form(
-            step_id="user", data_schema=_build_schema({})
+            step_id="user",
+            data_schema=_build_schema(self.hass, user_input or {}),
+            errors=errors,
         )
 
     @staticmethod
@@ -158,12 +212,17 @@ class EntityMonitorOptionsFlow(OptionsFlow):
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Manage the options."""
+        errors: dict[str, str] = {}
         if user_input is not None:
-            return self.async_create_entry(
-                title="", data=_normalise(user_input)
-            )
+            errors = _validate(user_input)
+            if not errors:
+                return self.async_create_entry(
+                    title="", data=_normalise(user_input)
+                )
 
+        defaults = user_input or dict(self.config_entry.options)
         return self.async_show_form(
             step_id="init",
-            data_schema=_build_schema(dict(self.config_entry.options)),
+            data_schema=_build_schema(self.hass, defaults),
+            errors=errors,
         )

@@ -31,8 +31,17 @@ gerar um relatório com as entidades e integrações que mais caem.
 1. Vá em **Configurações → Dispositivos e Serviços → Adicionar Integração**.
 2. Procure por **Entity Monitor**.
 3. No formulário, informe:
-   - **Entidades a monitorar** — selecione a lista de entidades que você quer
-     acompanhar (sensores, luzes, câmeras, dispositivos de qualquer integração).
+   - **Integrações a monitorar** — escolha uma ou mais integrações (ex:
+     `tuya`, `mqtt`, `zigbee2mqtt`) e **todas** as entidades delas entram no
+     monitoramento automaticamente. Ideal para acompanhar hubs inteiros sem
+     listar entidade por entidade.
+   - **Só a entidade principal de cada dispositivo** *(padrão ligado)* —
+     quando você escolhe uma integração, mantém apenas **uma** entidade por
+     device (a "principal", normalmente a que tem o mesmo nome do dispositivo),
+     descartando sensores de diagnóstico, RSSI, bateria, etc. Desligue se
+     quiser monitorar cada entidade individualmente.
+   - **Entidades extras** *(opcional)* — entidades avulsas que você quer
+     monitorar mesmo que a integração delas não esteja selecionada.
    - **Limite do alerta curto (segundos)** — o `X segundos`. Padrão: `30`.
    - **Limite do alerta longo (minutos)** — o `X minutos`. Padrão: `5`.
    - **Janela de quedas simultâneas (segundos)** — se várias entidades da
@@ -43,8 +52,9 @@ gerar um relatório com as entidades e integrações que mais caem.
      para não enviar notificação automática (o evento ainda é disparado).
    - **Esperar para notificar de novo (horas)** — o intervalo de silêncio
      antes de avisar outra vez sobre a mesma integração. Padrão: `1`.
-4. Pronto. Você pode mudar a lista de entidades, os limites e as notificações
-   a qualquer momento em **Configurar** na própria integração.
+4. Pronto. Você pode mudar as integrações, entidades, limites e notificações
+   a qualquer momento clicando em **Configurar** na integração (em
+   *Configurações → Dispositivos e Serviços → Integrations*).
 
 ## O que é criado
 
@@ -157,7 +167,9 @@ Para zerar o histórico, chame o serviço `entity_monitor.reset_statistics`.
 
 | Campo | Significado | Padrão |
 | --- | --- | --- |
-| `entities` | Lista de entidades monitoradas | — |
+| `integrations` | Integrações cujas entidades são monitoradas inteiras | — |
+| `only_primary_entity` | Manter só a entidade principal de cada device | `true` |
+| `entities` | Entidades avulsas extras | — |
 | `seconds_threshold` | `X segundos` para o alerta curto | `30` |
 | `minutes_threshold` | `X minutos` para o alerta longo | `5` |
 | `coalesce_seconds` | Janela em que quedas simultâneas viram 1 evento | `20` |

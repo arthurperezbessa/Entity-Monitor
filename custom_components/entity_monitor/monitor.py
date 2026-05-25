@@ -22,12 +22,15 @@ from homeassistant.util import dt as dt_util
 from .const import (
     CONF_COALESCE_SECONDS,
     CONF_ENTITIES,
+    CONF_INTEGRATIONS,
     CONF_MINUTES_THRESHOLD,
     CONF_NOTIFY_SERVICE,
+    CONF_ONLY_PRIMARY,
     CONF_RENOTIFY_HOURS,
     CONF_SECONDS_THRESHOLD,
     DEFAULT_COALESCE_SECONDS,
     DEFAULT_MINUTES_THRESHOLD,
+    DEFAULT_ONLY_PRIMARY,
     DEFAULT_RENOTIFY_HOURS,
     DEFAULT_SECONDS_THRESHOLD,
     DOMAIN,
@@ -36,6 +39,7 @@ from .const import (
     EVENT_UNAVAILABLE,
     LEVEL_MINUTES,
     LEVEL_SECONDS,
+    PRIMARY_DOMAIN_ORDER,
     SIGNAL_UPDATE,
     STORAGE_VERSION,
 )
@@ -176,8 +180,20 @@ class EntityMonitor:
 
     @property
     def entities(self) -> list[str]:
-        """Return the list of monitored entity ids."""
+        """Return the entity ids the user picked explicitly."""
         return list(self.entry.options.get(CONF_ENTITIES, []))
+
+    @property
+    def integrations(self) -> list[str]:
+        """Return the integrations whose entities are auto-monitored."""
+        return list(self.entry.options.get(CONF_INTEGRATIONS, []))
+
+    @property
+    def only_primary_entity(self) -> bool:
+        """Return whether to keep only one entity per device per integration."""
+        return bool(
+            self.entry.options.get(CONF_ONLY_PRIMARY, DEFAULT_ONLY_PRIMARY)
+        )
 
     @property
     def seconds_threshold(self) -> int:
@@ -257,7 +273,7 @@ class EntityMonitor:
 
     async def async_start(self) -> None:
         """Begin watching the configured entities."""
-        entities = self.entities
+        entities = self._resolved_entities()
         for eid in entities:
             self.stats.setdefault(eid, EntityStats())
 
@@ -271,6 +287,73 @@ class EntityMonitor:
             state = self.hass.states.get(eid)
             if state is not None and state.state == STATE_UNAVAILABLE:
                 self._start_outage(eid)
+
+    def _resolved_entities(self) -> list[str]:
+        """Expand integrations + explicit entities into the watch list."""
+        explicit = self.entities
+        integrations = set(self.integrations)
+
+        ids: list[str] = []
+        seen: set[str] = set()
+
+        def add(eid: str) -> None:
+            if eid not in seen:
+                seen.add(eid)
+                ids.append(eid)
+
+        for eid in explicit:
+            add(eid)
+
+        if not integrations:
+            return ids
+
+        registry = er.async_get(self.hass)
+        candidates = [
+            entry
+            for entry in registry.entities.values()
+            if entry.platform in integrations
+            and entry.entity_category is None
+            and entry.disabled_by is None
+            and entry.hidden_by is None
+        ]
+
+        if self.only_primary_entity:
+            candidates = self._pick_primary_per_device(candidates)
+
+        for entry in candidates:
+            add(entry.entity_id)
+        return ids
+
+    @staticmethod
+    def _pick_primary_per_device(entries: list) -> list:
+        """Keep one entity per device, preferring the device's main one."""
+        by_device: dict[str, list] = {}
+        loose: list = []
+        for entry in entries:
+            if entry.device_id:
+                by_device.setdefault(entry.device_id, []).append(entry)
+            else:
+                loose.append(entry)
+
+        domain_rank = {d: i for i, d in enumerate(PRIMARY_DOMAIN_ORDER)}
+        unknown_domain = len(PRIMARY_DOMAIN_ORDER)
+
+        def rank(entry) -> tuple:
+            # Entities whose original_name is None inherit the device's name,
+            # which is the convention for the "main" entity of a device.
+            named_after_device = 0 if entry.original_name is None else 1
+            return (
+                named_after_device,
+                domain_rank.get(entry.domain, unknown_domain),
+                entry.entity_id,
+            )
+
+        primaries = []
+        for device_entries in by_device.values():
+            device_entries.sort(key=rank)
+            primaries.append(device_entries[0])
+        primaries.extend(loose)
+        return primaries
 
     @callback
     def async_stop(self) -> None:

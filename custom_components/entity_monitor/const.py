@@ -7,6 +7,8 @@ PLATFORMS = ["binary_sensor", "sensor"]
 
 # Configuration keys
 CONF_ENTITIES = "entities"
+CONF_INTEGRATIONS = "integrations"
+CONF_ONLY_PRIMARY = "only_primary_entity"
 CONF_SECONDS_THRESHOLD = "seconds_threshold"
 CONF_MINUTES_THRESHOLD = "minutes_threshold"
 CONF_NOTIFY_SERVICE = "notify_service"
@@ -19,6 +21,29 @@ DEFAULT_SECONDS_THRESHOLD = 30
 DEFAULT_MINUTES_THRESHOLD = 5
 DEFAULT_RENOTIFY_HOURS = 1
 DEFAULT_COALESCE_SECONDS = 20
+DEFAULT_ONLY_PRIMARY = True
+
+# Domains preferred when picking the "primary" entity of a device.
+# Order matters: earlier = higher priority.
+PRIMARY_DOMAIN_ORDER = (
+    "light",
+    "switch",
+    "climate",
+    "lock",
+    "cover",
+    "fan",
+    "vacuum",
+    "media_player",
+    "humidifier",
+    "water_heater",
+    "alarm_control_panel",
+    "camera",
+    "remote",
+    "binary_sensor",
+    "sensor",
+    "number",
+    "select",
+)
 
 # Events fired on the Home Assistant bus
 EVENT_UNAVAILABLE = "entity_monitor_unavailable"
