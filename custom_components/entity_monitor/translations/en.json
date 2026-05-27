@@ -3,22 +3,25 @@
     "step": {
       "user": {
         "title": "Entity Monitor",
-        "description": "Pick whole integrations and/or individual entities to watch, and how long they may stay unavailable before an alert is fired.",
+        "description": "Pick whole integrations and/or individual entities to watch, then tune the notification thresholds.",
         "data": {
           "integrations": "Integrations to monitor (every entity of these)",
           "only_primary_entity": "Watch only the main entity of each device",
           "entities": "Extra entities to monitor (individual)",
-          "seconds_threshold": "Short alert threshold (seconds)",
-          "minutes_threshold": "Long alert threshold (minutes)",
+          "seconds_threshold": "Confirm an outage after (seconds)",
           "coalesce_seconds": "Window to treat simultaneous drops as one (seconds)",
           "notify_service": "Notify service (e.g. notify.mobile_app_xxx) - optional",
-          "renotify_hours": "Wait before notifying the same integration again (hours)",
+          "notify_cooldown_hours": "N1 cooldown / N2 long summary (hours)",
+          "notify_short_summary_hours": "N2 short summary delay (hours, 0 disables)",
+          "sustained_outage_short_minutes": "N3 short threshold (minutes, 0 disables)",
+          "sustained_outage_long_hours": "N3 long threshold (hours, 0 disables)",
           "auto_reset_days": "Auto-reset statistics every N days (0 = never)"
         }
       }
     },
     "error": {
-      "nothing_selected": "Pick at least one integration or one entity."
+      "nothing_selected": "Pick at least one integration or one entity.",
+      "short_summary_too_long": "Short summary delay must be smaller than the cooldown."
     },
     "abort": {
       "single_instance_allowed": "Entity Monitor is already configured."
@@ -28,22 +31,25 @@
     "step": {
       "init": {
         "title": "Entity Monitor",
-        "description": "Update the monitored integrations, entities and the alert thresholds.",
+        "description": "Update the monitored integrations, entities and the notification thresholds.",
         "data": {
           "integrations": "Integrations to monitor (every entity of these)",
           "only_primary_entity": "Watch only the main entity of each device",
           "entities": "Extra entities to monitor (individual)",
-          "seconds_threshold": "Short alert threshold (seconds)",
-          "minutes_threshold": "Long alert threshold (minutes)",
+          "seconds_threshold": "Confirm an outage after (seconds)",
           "coalesce_seconds": "Window to treat simultaneous drops as one (seconds)",
           "notify_service": "Notify service (e.g. notify.mobile_app_xxx) - optional",
-          "renotify_hours": "Wait before notifying the same integration again (hours)",
+          "notify_cooldown_hours": "N1 cooldown / N2 long summary (hours)",
+          "notify_short_summary_hours": "N2 short summary delay (hours, 0 disables)",
+          "sustained_outage_short_minutes": "N3 short threshold (minutes, 0 disables)",
+          "sustained_outage_long_hours": "N3 long threshold (hours, 0 disables)",
           "auto_reset_days": "Auto-reset statistics every N days (0 = never)"
         }
       }
     },
     "error": {
-      "nothing_selected": "Pick at least one integration or one entity."
+      "nothing_selected": "Pick at least one integration or one entity.",
+      "short_summary_too_long": "Short summary delay must be smaller than the cooldown."
     }
   },
   "services": {
