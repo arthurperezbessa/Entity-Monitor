@@ -31,18 +31,22 @@ from .const import (
     CONF_COALESCE_SECONDS,
     CONF_ENTITIES,
     CONF_INTEGRATIONS,
-    CONF_MINUTES_THRESHOLD,
+    CONF_NOTIFY_COOLDOWN_HOURS,
     CONF_NOTIFY_SERVICE,
+    CONF_NOTIFY_SHORT_SUMMARY_HOURS,
     CONF_ONLY_PRIMARY,
-    CONF_RENOTIFY_HOURS,
     CONF_SECONDS_THRESHOLD,
+    CONF_SUSTAINED_OUTAGE_LONG_HOURS,
+    CONF_SUSTAINED_OUTAGE_SHORT_MINUTES,
     DEFAULT_AUTO_RESET_DAYS,
     DEFAULT_COALESCE_SECONDS,
-    DEFAULT_MINUTES_THRESHOLD,
     DEFAULT_NAME,
+    DEFAULT_NOTIFY_COOLDOWN_HOURS,
+    DEFAULT_NOTIFY_SHORT_SUMMARY_HOURS,
     DEFAULT_ONLY_PRIMARY,
-    DEFAULT_RENOTIFY_HOURS,
     DEFAULT_SECONDS_THRESHOLD,
+    DEFAULT_SUSTAINED_OUTAGE_LONG_HOURS,
+    DEFAULT_SUSTAINED_OUTAGE_SHORT_MINUTES,
     DOMAIN,
 )
 
@@ -96,20 +100,6 @@ def _build_schema(
                 )
             ),
             vol.Required(
-                CONF_MINUTES_THRESHOLD,
-                default=defaults.get(
-                    CONF_MINUTES_THRESHOLD, DEFAULT_MINUTES_THRESHOLD
-                ),
-            ): NumberSelector(
-                NumberSelectorConfig(
-                    min=1,
-                    max=1440,
-                    step=1,
-                    unit_of_measurement="min",
-                    mode=NumberSelectorMode.BOX,
-                )
-            ),
-            vol.Required(
                 CONF_COALESCE_SECONDS,
                 default=defaults.get(
                     CONF_COALESCE_SECONDS, DEFAULT_COALESCE_SECONDS
@@ -128,13 +118,59 @@ def _build_schema(
                 default=defaults.get(CONF_NOTIFY_SERVICE, ""),
             ): TextSelector(),
             vol.Required(
-                CONF_RENOTIFY_HOURS,
+                CONF_NOTIFY_COOLDOWN_HOURS,
                 default=defaults.get(
-                    CONF_RENOTIFY_HOURS, DEFAULT_RENOTIFY_HOURS
+                    CONF_NOTIFY_COOLDOWN_HOURS,
+                    DEFAULT_NOTIFY_COOLDOWN_HOURS,
                 ),
             ): NumberSelector(
                 NumberSelectorConfig(
                     min=1,
+                    max=168,
+                    step=1,
+                    unit_of_measurement="h",
+                    mode=NumberSelectorMode.BOX,
+                )
+            ),
+            vol.Required(
+                CONF_NOTIFY_SHORT_SUMMARY_HOURS,
+                default=defaults.get(
+                    CONF_NOTIFY_SHORT_SUMMARY_HOURS,
+                    DEFAULT_NOTIFY_SHORT_SUMMARY_HOURS,
+                ),
+            ): NumberSelector(
+                NumberSelectorConfig(
+                    min=0,
+                    max=168,
+                    step=1,
+                    unit_of_measurement="h",
+                    mode=NumberSelectorMode.BOX,
+                )
+            ),
+            vol.Required(
+                CONF_SUSTAINED_OUTAGE_SHORT_MINUTES,
+                default=defaults.get(
+                    CONF_SUSTAINED_OUTAGE_SHORT_MINUTES,
+                    DEFAULT_SUSTAINED_OUTAGE_SHORT_MINUTES,
+                ),
+            ): NumberSelector(
+                NumberSelectorConfig(
+                    min=0,
+                    max=1440,
+                    step=1,
+                    unit_of_measurement="min",
+                    mode=NumberSelectorMode.BOX,
+                )
+            ),
+            vol.Required(
+                CONF_SUSTAINED_OUTAGE_LONG_HOURS,
+                default=defaults.get(
+                    CONF_SUSTAINED_OUTAGE_LONG_HOURS,
+                    DEFAULT_SUSTAINED_OUTAGE_LONG_HOURS,
+                ),
+            ): NumberSelector(
+                NumberSelectorConfig(
+                    min=0,
                     max=168,
                     step=1,
                     unit_of_measurement="h",
@@ -168,10 +204,20 @@ def _normalise(user_input: dict[str, Any]) -> dict[str, Any]:
             user_input.get(CONF_ONLY_PRIMARY, DEFAULT_ONLY_PRIMARY)
         ),
         CONF_SECONDS_THRESHOLD: int(user_input[CONF_SECONDS_THRESHOLD]),
-        CONF_MINUTES_THRESHOLD: int(user_input[CONF_MINUTES_THRESHOLD]),
         CONF_COALESCE_SECONDS: int(user_input[CONF_COALESCE_SECONDS]),
         CONF_NOTIFY_SERVICE: user_input.get(CONF_NOTIFY_SERVICE, "").strip(),
-        CONF_RENOTIFY_HOURS: int(user_input[CONF_RENOTIFY_HOURS]),
+        CONF_NOTIFY_COOLDOWN_HOURS: int(
+            user_input[CONF_NOTIFY_COOLDOWN_HOURS]
+        ),
+        CONF_NOTIFY_SHORT_SUMMARY_HOURS: int(
+            user_input[CONF_NOTIFY_SHORT_SUMMARY_HOURS]
+        ),
+        CONF_SUSTAINED_OUTAGE_SHORT_MINUTES: int(
+            user_input[CONF_SUSTAINED_OUTAGE_SHORT_MINUTES]
+        ),
+        CONF_SUSTAINED_OUTAGE_LONG_HOURS: int(
+            user_input[CONF_SUSTAINED_OUTAGE_LONG_HOURS]
+        ),
         CONF_AUTO_RESET_DAYS: int(
             user_input.get(CONF_AUTO_RESET_DAYS, DEFAULT_AUTO_RESET_DAYS)
         ),
@@ -184,6 +230,10 @@ def _validate(user_input: dict[str, Any]) -> dict[str, str]:
         CONF_INTEGRATIONS
     ):
         return {"base": "nothing_selected"}
+    short_h = int(user_input.get(CONF_NOTIFY_SHORT_SUMMARY_HOURS, 0))
+    cooldown_h = int(user_input.get(CONF_NOTIFY_COOLDOWN_HOURS, 0))
+    if short_h and short_h >= cooldown_h:
+        return {CONF_NOTIFY_SHORT_SUMMARY_HOURS: "short_summary_too_long"}
     return {}
 
 

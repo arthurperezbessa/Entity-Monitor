@@ -3,22 +3,25 @@
     "step": {
       "user": {
         "title": "Entity Monitor",
-        "description": "Escolha integrações inteiras e/ou entidades específicas para monitorar, e por quanto tempo elas podem ficar indisponíveis antes de disparar um alerta.",
+        "description": "Escolha integrações inteiras e/ou entidades específicas para monitorar, e ajuste os limites das notificações.",
         "data": {
           "integrations": "Integrações para monitorar (todas as entidades delas)",
           "only_primary_entity": "Monitorar só a entidade principal de cada dispositivo",
           "entities": "Entidades extras para monitorar (individuais)",
-          "seconds_threshold": "Limite do alerta curto (segundos)",
-          "minutes_threshold": "Limite do alerta longo (minutos)",
+          "seconds_threshold": "Confirmar queda após (segundos)",
           "coalesce_seconds": "Janela para tratar quedas simultâneas como uma (segundos)",
           "notify_service": "Serviço de notificação (ex: notify.mobile_app_xxx) - opcional",
-          "renotify_hours": "Esperar antes de notificar a mesma integração de novo (horas)",
+          "notify_cooldown_hours": "Cooldown do N1 / janela do resumo longo N2 (horas)",
+          "notify_short_summary_hours": "Resumo curto N2 (horas, 0 desliga)",
+          "sustained_outage_short_minutes": "Limite curto N3 (minutos, 0 desliga)",
+          "sustained_outage_long_hours": "Limite longo N3 (horas, 0 desliga)",
           "auto_reset_days": "Zerar estatísticas a cada N dias (0 = nunca)"
         }
       }
     },
     "error": {
-      "nothing_selected": "Escolha pelo menos uma integração ou uma entidade."
+      "nothing_selected": "Escolha pelo menos uma integração ou uma entidade.",
+      "short_summary_too_long": "O resumo curto precisa ser menor que o cooldown."
     },
     "abort": {
       "single_instance_allowed": "O Entity Monitor já está configurado."
@@ -28,22 +31,25 @@
     "step": {
       "init": {
         "title": "Entity Monitor",
-        "description": "Atualize as integrações, entidades monitoradas e os limites de alerta.",
+        "description": "Atualize as integrações, entidades monitoradas e os limites das notificações.",
         "data": {
           "integrations": "Integrações para monitorar (todas as entidades delas)",
           "only_primary_entity": "Monitorar só a entidade principal de cada dispositivo",
           "entities": "Entidades extras para monitorar (individuais)",
-          "seconds_threshold": "Limite do alerta curto (segundos)",
-          "minutes_threshold": "Limite do alerta longo (minutos)",
+          "seconds_threshold": "Confirmar queda após (segundos)",
           "coalesce_seconds": "Janela para tratar quedas simultâneas como uma (segundos)",
           "notify_service": "Serviço de notificação (ex: notify.mobile_app_xxx) - opcional",
-          "renotify_hours": "Esperar antes de notificar a mesma integração de novo (horas)",
+          "notify_cooldown_hours": "Cooldown do N1 / janela do resumo longo N2 (horas)",
+          "notify_short_summary_hours": "Resumo curto N2 (horas, 0 desliga)",
+          "sustained_outage_short_minutes": "Limite curto N3 (minutos, 0 desliga)",
+          "sustained_outage_long_hours": "Limite longo N3 (horas, 0 desliga)",
           "auto_reset_days": "Zerar estatísticas a cada N dias (0 = nunca)"
         }
       }
     },
     "error": {
-      "nothing_selected": "Escolha pelo menos uma integração ou uma entidade."
+      "nothing_selected": "Escolha pelo menos uma integração ou uma entidade.",
+      "short_summary_too_long": "O resumo curto precisa ser menor que o cooldown."
     }
   },
   "services": {
