@@ -26,7 +26,7 @@ from .const import (
     CONF_INTEGRATIONS,
     CONF_NOTIFY_COOLDOWN_HOURS,
     CONF_NOTIFY_SERVICE,
-    CONF_NOTIFY_SHORT_SUMMARY_HOURS,
+    CONF_NOTIFY_UPGRADE_WINDOW_HOURS,
     CONF_ONLY_PRIMARY,
     CONF_SECONDS_THRESHOLD,
     CONF_SUSTAINED_OUTAGE_LONG_HOURS,
@@ -34,7 +34,7 @@ from .const import (
     DEFAULT_AUTO_RESET_DAYS,
     DEFAULT_COALESCE_SECONDS,
     DEFAULT_NOTIFY_COOLDOWN_HOURS,
-    DEFAULT_NOTIFY_SHORT_SUMMARY_HOURS,
+    DEFAULT_NOTIFY_UPGRADE_WINDOW_HOURS,
     DEFAULT_ONLY_PRIMARY,
     DEFAULT_SECONDS_THRESHOLD,
     DEFAULT_SUSTAINED_OUTAGE_LONG_HOURS,
@@ -48,8 +48,7 @@ from .const import (
     LEVEL_SECONDS,
     NOTIFY_N1,
     NOTIFY_N1_UPGRADE,
-    NOTIFY_N2_LONG,
-    NOTIFY_N2_SHORT,
+    NOTIFY_N2,
     NOTIFY_N3_LONG,
     NOTIFY_N3_SHORT,
     NOTIFY_TEST,
@@ -170,16 +169,21 @@ class IntegrationBurst:
 
 @dataclass
 class NotificationCycle:
-    """Tracks the N1/N2 notification state of one integration."""
+    """Tracks the N1/N2 notification state of one integration.
+
+    A cycle opens with an N1, then rolls forward in fixed windows of
+    ``notify_cooldown_hours``. At the end of each window an N2 summary fires
+    (when there were drops) and the window restarts silently. A full window
+    with no drops closes the cycle so the next drop can fire a fresh N1.
+    """
 
     started_at: datetime
     kind: str  # SCOPE_ENTITY or SCOPE_INTEGRATION
     notified_entity_id: str | None
     upgraded: bool = False
     bursts: list[IntegrationBurst] = field(default_factory=list)
-    short_summary_fired: bool = False
-    short_summary_cancel: CALLBACK_TYPE | None = None
-    long_summary_cancel: CALLBACK_TYPE | None = None
+    summaries_fired: int = 0
+    summary_cancel: CALLBACK_TYPE | None = None
 
 
 @dataclass
@@ -278,12 +282,13 @@ class EntityMonitor:
         )
 
     @property
-    def notify_short_summary_hours(self) -> int:
-        """Return the N2-short summary delay, in hours (0 disables it)."""
+    def notify_upgrade_window_hours(self) -> int:
+        """Return the window during which a 2nd different entity escalates the
+        N1 cycle to integration scope (0 disables the upgrade)."""
         return int(
             self.entry.options.get(
-                CONF_NOTIFY_SHORT_SUMMARY_HOURS,
-                DEFAULT_NOTIFY_SHORT_SUMMARY_HOURS,
+                CONF_NOTIFY_UPGRADE_WINDOW_HOURS,
+                DEFAULT_NOTIFY_UPGRADE_WINDOW_HOURS,
             )
         )
 
@@ -450,10 +455,8 @@ class EntityMonitor:
             cancel()
         self._flush_timers.clear()
         for cycle in self._cycle.values():
-            if cycle.short_summary_cancel is not None:
-                cycle.short_summary_cancel()
-            if cycle.long_summary_cancel is not None:
-                cycle.long_summary_cancel()
+            if cycle.summary_cancel is not None:
+                cycle.summary_cancel()
         self._cycle.clear()
         if self._auto_reset_cancel is not None:
             self._auto_reset_cancel()
@@ -705,25 +708,31 @@ class EntityMonitor:
             self._start_cycle(integration, burst)
             return
 
-        # Cooldown is active: accumulate the burst for the summaries.
+        # Cooldown is active: accumulate the burst for the next summary.
         if burst not in cycle.bursts:
             cycle.bursts.append(burst)
 
-        # Upgrade the cycle to integration-scope if a different entity drops.
+        # Upgrade the cycle to integration-scope if a different entity drops
+        # within the upgrade window from the original N1.
         if cycle.kind == SCOPE_ENTITY and not cycle.upgraded:
-            others = [
-                e
-                for e in burst.entities
-                if e != cycle.notified_entity_id
-            ]
-            if others or len(burst.entities) > 1:
-                cycle.kind = SCOPE_INTEGRATION
-                cycle.upgraded = True
-                self._dispatch_notification(
-                    integration=integration,
-                    kind=NOTIFY_N1_UPGRADE,
-                    scope=SCOPE_INTEGRATION,
-                )
+            upgrade_window = self.notify_upgrade_window_hours * 3600
+            elapsed = (
+                dt_util.utcnow() - cycle.started_at
+            ).total_seconds()
+            if elapsed < upgrade_window:
+                others = [
+                    e
+                    for e in burst.entities
+                    if e != cycle.notified_entity_id
+                ]
+                if others or len(burst.entities) > 1:
+                    cycle.kind = SCOPE_INTEGRATION
+                    cycle.upgraded = True
+                    self._dispatch_notification(
+                        integration=integration,
+                        kind=NOTIFY_N1_UPGRADE,
+                        scope=SCOPE_INTEGRATION,
+                    )
 
     @callback
     def _start_cycle(
@@ -753,52 +762,56 @@ class EntityMonitor:
             entity_id=notified_eid,
         )
 
-        cooldown_h = self.notify_cooldown_hours
-        short_h = self.notify_short_summary_hours
-        if 0 < short_h < cooldown_h:
-            cycle.short_summary_cancel = async_call_later(
-                self.hass,
-                short_h * 3600,
-                partial(self._fire_summary, integration, "short"),
-            )
-        cycle.long_summary_cancel = async_call_later(
+        cycle.summary_cancel = async_call_later(
             self.hass,
-            cooldown_h * 3600,
-            partial(self._fire_summary, integration, "long"),
+            self.notify_cooldown_hours * 3600,
+            partial(self._fire_summary, integration),
         )
 
     @callback
-    def _fire_summary(
-        self, integration: str, summary: str, _now: datetime
-    ) -> None:
-        """Fire an N2 summary (short or long) for the active cycle."""
+    def _fire_summary(self, integration: str, _now: datetime) -> None:
+        """Fire the rolling N2 summary and decide whether to keep rolling."""
         cycle = self._cycle.get(integration)
         if cycle is None:
             return
+        cycle.summary_cancel = None
 
         burst_count = len(cycle.bursts)
+        # On the first summary N1 already announced the trigger drop, so the
+        # summary only adds value when there is more than one. From the second
+        # summary onwards there was no N1, so any drop is worth reporting.
+        threshold = 2 if cycle.summaries_fired == 0 else 1
 
-        if summary == "short":
-            cycle.short_summary_cancel = None
-            cycle.short_summary_fired = True
-            notify_kind = NOTIFY_N2_SHORT
-            window_hours = self.notify_short_summary_hours
-        else:
-            cycle.long_summary_cancel = None
-            notify_kind = NOTIFY_N2_LONG
-            window_hours = self.notify_cooldown_hours
-
-        if burst_count >= 2:
+        if burst_count >= threshold:
+            scope = cycle.kind
+            if scope == SCOPE_ENTITY and any(
+                any(e != cycle.notified_entity_id for e in b.entities)
+                for b in cycle.bursts
+            ):
+                scope = SCOPE_INTEGRATION
             self._dispatch_notification(
                 integration=integration,
-                kind=notify_kind,
-                scope=cycle.kind,
-                entity_id=cycle.notified_entity_id,
+                kind=NOTIFY_N2,
+                scope=scope,
+                entity_id=(
+                    cycle.notified_entity_id
+                    if scope == SCOPE_ENTITY
+                    else None
+                ),
                 outage_count=burst_count,
-                window_hours=window_hours,
+                window_hours=self.notify_cooldown_hours,
             )
 
-        if summary == "long":
+        if burst_count >= 1:
+            # Integration is still unstable: roll into a fresh silent window.
+            cycle.summaries_fired += 1
+            cycle.bursts = []
+            cycle.summary_cancel = async_call_later(
+                self.hass,
+                self.notify_cooldown_hours * 3600,
+                partial(self._fire_summary, integration),
+            )
+        else:
             self._end_cycle(integration)
 
     @callback
@@ -807,10 +820,8 @@ class EntityMonitor:
         cycle = self._cycle.pop(integration, None)
         if cycle is None:
             return
-        if cycle.short_summary_cancel is not None:
-            cycle.short_summary_cancel()
-        if cycle.long_summary_cancel is not None:
-            cycle.long_summary_cancel()
+        if cycle.summary_cancel is not None:
+            cycle.summary_cancel()
         self._prune_bursts(integration)
 
     # -- N3: sustained-outage notifications -----------------------------------
@@ -971,7 +982,7 @@ class EntityMonitor:
                 "Outras entidades caíram, escalando para a integração.",
             )
 
-        if kind in (NOTIFY_N2_SHORT, NOTIFY_N2_LONG):
+        if kind == NOTIFY_N2:
             if scope == SCOPE_ENTITY:
                 return (
                     integration_name,
@@ -1178,7 +1189,7 @@ class EntityMonitor:
             ),
             "sustained_outage_long_hours": self.sustained_outage_long_hours,
             "notify_cooldown_hours": self.notify_cooldown_hours,
-            "notify_short_summary_hours": self.notify_short_summary_hours,
+            "notify_upgrade_window_hours": self.notify_upgrade_window_hours,
             "coalesce_seconds": self.coalesce_seconds,
             "auto_reset_days": self.auto_reset_days,
             "last_reset_at": (

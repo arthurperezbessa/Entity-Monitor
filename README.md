@@ -49,11 +49,11 @@ relatório com as entidades e integrações que mais caem.
    - **Serviço de notificação** *(opcional)* — o serviço `notify.*` que vai
      receber os avisos (ex: `notify.mobile_app_meu_celular`). Deixe em branco
      para não enviar notificação automática (o evento ainda é disparado).
-   - **Cooldown do N1 / janela do resumo longo N2** *(horas)* — quanto tempo
-     o sistema fica em silêncio depois do N1, e janela coberta pelo resumo
-     N2-long. Padrão: `12`.
-   - **Resumo curto N2** *(horas, 0 desliga)* — após quantas horas dentro do
-     cooldown disparar o resumo curto (se houve mais quedas). Padrão: `2`.
+   - **Janela do resumo N2 / cooldown do N1** *(horas)* — tamanho da janela
+     coberta pelo resumo N2 e período de silêncio do N1. Padrão: `24`.
+   - **Janela do upgrade N1** *(horas, 0 desliga)* — durante esse tempo após
+     o N1, uma 2ª entidade diferente caindo dispara a notificação de upgrade.
+     Padrão: `2`.
    - **Limite curto N3** *(minutos, 0 desliga)* — uma entidade indisponível
      por esse tempo dispara o N3-short. Padrão: `30`.
    - **Limite longo N3** *(horas, 0 desliga)* — uma entidade indisponível
@@ -95,38 +95,45 @@ sozinho — sem precisar criar automação. A lógica em três níveis:
 
 ### N1 — Queda pontual (imediata)
 
-Dispara quando uma integração cai e não está em cooldown. O conteúdo varia
-conforme **quantas entidades** caíram juntas no mesmo *burst*:
+Dispara quando uma integração cai e **não há ciclo ativo** pra ela. O
+conteúdo varia conforme **quantas entidades** caíram juntas no mesmo
+*burst*:
 
 - **1 entidade** → título: `<Nome da integração>`, corpo:
   `<Nome amigável> ficou indisponível.`
 - **2+ entidades** → título: `Integração <X> instável`, corpo:
   `Várias entidades caíram juntas.`
 
-Depois disso, abre um **cooldown** de `notify_cooldown_hours` horas (padrão
-12h) em que o N1 não dispara de novo. Durante esse cooldown:
+Depois disso, abre um ciclo de `notify_cooldown_hours` horas (padrão 24h)
+em que o N1 fica silencioso. Durante esse ciclo:
 
-- Se uma **segunda entidade diferente** cai (escalada para "integração
-  instável"), uma notificação de upgrade é disparada — única vez por ciclo.
-  O cooldown segue contando normalmente.
-- Todas as quedas continuam sendo acumuladas para os resumos N2.
+- Se uma **segunda entidade diferente** cai dentro da
+  `notify_upgrade_window_hours` (padrão 2h), uma notificação de upgrade é
+  disparada — única vez por ciclo. Depois desse limite quedas adicionais
+  só acumulam silenciosamente.
+- Todas as quedas continuam sendo acumuladas para o resumo N2.
 
-### N2 — Resumos (automáticos)
+### N2 — Resumo periódico (rolling)
 
-Dentro do cooldown disparado pelo N1, dois resumos podem ser enviados:
+Ao final de cada janela de `notify_cooldown_hours` (padrão 24h), o sistema
+emite um resumo do que aconteceu:
 
-- **N2-short** após `notify_short_summary_hours` horas (padrão 2h)
-- **N2-long** ao expirar o cooldown (padrão 12h), encerrando o ciclo
+- Na **1ª janela** do ciclo (logo após o N1) ele só dispara se houve **≥2
+  quedas**, porque o N1 já anunciou a primeira.
+- Em janelas seguintes (ciclo rolando), basta **≥1 queda** pra disparar.
 
-Cada resumo só dispara se **houve mais de uma queda** no ciclo (caso
-contrário, fica em silêncio):
+Formato:
 
-- Se todas as quedas foram da mesma única entidade (sem upgrade):
+- Se todas as quedas no período foram da mesma entidade (sem upgrade):
   `<Nome> indisponível X vezes nas últimas Yh.`
-- Se foi um cenário de integração instável:
+- Caso contrário:
   `X quedas nas últimas Yh.` (título `Integração <X> instável`)
 
-Coloque `notify_short_summary_hours = 0` para desligar o resumo curto.
+**Rolling:** se houve ao menos 1 queda na janela, o ciclo continua e abre
+uma nova janela silenciosa. Próximo N2 em +24h. Se uma janela inteira passa
+sem nenhuma queda, o ciclo encerra — a próxima queda dispara um N1 fresh.
+Assim, quando uma integração fica instável por vários dias seguidos, você
+recebe **apenas um resumo por dia** (e não um N1 novo a cada manhã).
 
 ### N3 — Indisponibilidade prolongada (independente)
 
@@ -156,12 +163,12 @@ bus do Home Assistant, com os campos:
 | --- | --- |
 | `integration` | Slug da integração (ex: `localtuya`). |
 | `integration_name` | Nome amigável (ex: `Local Tuya`). |
-| `kind` | `n1` / `n1_upgrade` / `n2_short` / `n2_long` / `n3_short` / `n3_long` / `test`. |
+| `kind` | `n1` / `n1_upgrade` / `n2` / `n3_short` / `n3_long` / `test`. |
 | `scope` | `entity` ou `integration`. |
 | `entity_id` | ID da entidade quando `scope=entity`. |
 | `entity_name` | Nome amigável da entidade. |
-| `outage_count` | Para N2: número de quedas no período. |
-| `window_hours` | Para N2: janela coberta. |
+| `outage_count` | Para N2: número de quedas na janela. |
+| `window_hours` | Para N2: tamanho da janela. |
 | `threshold_seconds` | Para N3: limite que disparou. |
 | `title`, `message` | Conteúdo final da notificação. |
 
@@ -256,8 +263,8 @@ Para zerar o histórico:
 | `seconds_threshold` | Segundos para confirmar a queda | `30` |
 | `coalesce_seconds` | Janela em que quedas simultâneas viram 1 evento | `20` |
 | `notify_service` | Serviço `notify.*` para os avisos automáticos (opcional) | — |
-| `notify_cooldown_hours` | Cooldown do N1 e janela do resumo longo N2 (horas) | `12` |
-| `notify_short_summary_hours` | Janela do resumo curto N2 (horas, 0 desliga) | `2` |
+| `notify_cooldown_hours` | Janela do resumo N2 e cooldown do N1 (horas) | `24` |
+| `notify_upgrade_window_hours` | Janela do upgrade N1 (horas, 0 desliga) | `2` |
 | `sustained_outage_short_minutes` | Limite curto do N3 (minutos, 0 desliga) | `30` |
 | `sustained_outage_long_hours` | Limite longo do N3 (horas, 0 desliga) | `12` |
 | `auto_reset_days` | Zera as estatísticas a cada N dias (`0` desliga) | `30` |

@@ -11,8 +11,8 @@
           "seconds_threshold": "Confirmar queda após (segundos)",
           "coalesce_seconds": "Janela para tratar quedas simultâneas como uma (segundos)",
           "notify_service": "Serviço de notificação (ex: notify.mobile_app_xxx) - opcional",
-          "notify_cooldown_hours": "Cooldown do N1 / janela do resumo longo N2 (horas)",
-          "notify_short_summary_hours": "Resumo curto N2 (horas, 0 desliga)",
+          "notify_cooldown_hours": "Janela do resumo N2 / cooldown do N1 (horas)",
+          "notify_upgrade_window_hours": "Janela do upgrade N1 (horas, 0 desliga)",
           "sustained_outage_short_minutes": "Limite curto N3 (minutos, 0 desliga)",
           "sustained_outage_long_hours": "Limite longo N3 (horas, 0 desliga)",
           "auto_reset_days": "Zerar estatísticas a cada N dias (0 = nunca)"
@@ -21,7 +21,7 @@
     },
     "error": {
       "nothing_selected": "Escolha pelo menos uma integração ou uma entidade.",
-      "short_summary_too_long": "O resumo curto precisa ser menor que o cooldown."
+      "upgrade_window_too_long": "A janela do upgrade precisa ser menor que a janela do resumo."
     },
     "abort": {
       "single_instance_allowed": "O Entity Monitor já está configurado."
@@ -39,8 +39,8 @@
           "seconds_threshold": "Confirmar queda após (segundos)",
           "coalesce_seconds": "Janela para tratar quedas simultâneas como uma (segundos)",
           "notify_service": "Serviço de notificação (ex: notify.mobile_app_xxx) - opcional",
-          "notify_cooldown_hours": "Cooldown do N1 / janela do resumo longo N2 (horas)",
-          "notify_short_summary_hours": "Resumo curto N2 (horas, 0 desliga)",
+          "notify_cooldown_hours": "Janela do resumo N2 / cooldown do N1 (horas)",
+          "notify_upgrade_window_hours": "Janela do upgrade N1 (horas, 0 desliga)",
           "sustained_outage_short_minutes": "Limite curto N3 (minutos, 0 desliga)",
           "sustained_outage_long_hours": "Limite longo N3 (horas, 0 desliga)",
           "auto_reset_days": "Zerar estatísticas a cada N dias (0 = nunca)"
@@ -49,7 +49,7 @@
     },
     "error": {
       "nothing_selected": "Escolha pelo menos uma integração ou uma entidade.",
-      "short_summary_too_long": "O resumo curto precisa ser menor que o cooldown."
+      "upgrade_window_too_long": "A janela do upgrade precisa ser menor que a janela do resumo."
     }
   },
   "services": {

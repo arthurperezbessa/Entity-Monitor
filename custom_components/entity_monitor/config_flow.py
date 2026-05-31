@@ -33,7 +33,7 @@ from .const import (
     CONF_INTEGRATIONS,
     CONF_NOTIFY_COOLDOWN_HOURS,
     CONF_NOTIFY_SERVICE,
-    CONF_NOTIFY_SHORT_SUMMARY_HOURS,
+    CONF_NOTIFY_UPGRADE_WINDOW_HOURS,
     CONF_ONLY_PRIMARY,
     CONF_SECONDS_THRESHOLD,
     CONF_SUSTAINED_OUTAGE_LONG_HOURS,
@@ -42,7 +42,7 @@ from .const import (
     DEFAULT_COALESCE_SECONDS,
     DEFAULT_NAME,
     DEFAULT_NOTIFY_COOLDOWN_HOURS,
-    DEFAULT_NOTIFY_SHORT_SUMMARY_HOURS,
+    DEFAULT_NOTIFY_UPGRADE_WINDOW_HOURS,
     DEFAULT_ONLY_PRIMARY,
     DEFAULT_SECONDS_THRESHOLD,
     DEFAULT_SUSTAINED_OUTAGE_LONG_HOURS,
@@ -133,10 +133,10 @@ def _build_schema(
                 )
             ),
             vol.Required(
-                CONF_NOTIFY_SHORT_SUMMARY_HOURS,
+                CONF_NOTIFY_UPGRADE_WINDOW_HOURS,
                 default=defaults.get(
-                    CONF_NOTIFY_SHORT_SUMMARY_HOURS,
-                    DEFAULT_NOTIFY_SHORT_SUMMARY_HOURS,
+                    CONF_NOTIFY_UPGRADE_WINDOW_HOURS,
+                    DEFAULT_NOTIFY_UPGRADE_WINDOW_HOURS,
                 ),
             ): NumberSelector(
                 NumberSelectorConfig(
@@ -209,8 +209,8 @@ def _normalise(user_input: dict[str, Any]) -> dict[str, Any]:
         CONF_NOTIFY_COOLDOWN_HOURS: int(
             user_input[CONF_NOTIFY_COOLDOWN_HOURS]
         ),
-        CONF_NOTIFY_SHORT_SUMMARY_HOURS: int(
-            user_input[CONF_NOTIFY_SHORT_SUMMARY_HOURS]
+        CONF_NOTIFY_UPGRADE_WINDOW_HOURS: int(
+            user_input[CONF_NOTIFY_UPGRADE_WINDOW_HOURS]
         ),
         CONF_SUSTAINED_OUTAGE_SHORT_MINUTES: int(
             user_input[CONF_SUSTAINED_OUTAGE_SHORT_MINUTES]
@@ -230,10 +230,12 @@ def _validate(user_input: dict[str, Any]) -> dict[str, str]:
         CONF_INTEGRATIONS
     ):
         return {"base": "nothing_selected"}
-    short_h = int(user_input.get(CONF_NOTIFY_SHORT_SUMMARY_HOURS, 0))
+    upgrade_h = int(user_input.get(CONF_NOTIFY_UPGRADE_WINDOW_HOURS, 0))
     cooldown_h = int(user_input.get(CONF_NOTIFY_COOLDOWN_HOURS, 0))
-    if short_h and short_h >= cooldown_h:
-        return {CONF_NOTIFY_SHORT_SUMMARY_HOURS: "short_summary_too_long"}
+    if upgrade_h and upgrade_h >= cooldown_h:
+        return {
+            CONF_NOTIFY_UPGRADE_WINDOW_HOURS: "upgrade_window_too_long",
+        }
     return {}
 
 

@@ -11,8 +11,8 @@
           "seconds_threshold": "Confirm an outage after (seconds)",
           "coalesce_seconds": "Window to treat simultaneous drops as one (seconds)",
           "notify_service": "Notify service (e.g. notify.mobile_app_xxx) - optional",
-          "notify_cooldown_hours": "N1 cooldown / N2 long summary (hours)",
-          "notify_short_summary_hours": "N2 short summary delay (hours, 0 disables)",
+          "notify_cooldown_hours": "Summary window / N1 cooldown (hours)",
+          "notify_upgrade_window_hours": "N1 upgrade window (hours, 0 disables)",
           "sustained_outage_short_minutes": "N3 short threshold (minutes, 0 disables)",
           "sustained_outage_long_hours": "N3 long threshold (hours, 0 disables)",
           "auto_reset_days": "Auto-reset statistics every N days (0 = never)"
@@ -21,7 +21,7 @@
     },
     "error": {
       "nothing_selected": "Pick at least one integration or one entity.",
-      "short_summary_too_long": "Short summary delay must be smaller than the cooldown."
+      "upgrade_window_too_long": "Upgrade window must be smaller than the summary window."
     },
     "abort": {
       "single_instance_allowed": "Entity Monitor is already configured."
@@ -39,8 +39,8 @@
           "seconds_threshold": "Confirm an outage after (seconds)",
           "coalesce_seconds": "Window to treat simultaneous drops as one (seconds)",
           "notify_service": "Notify service (e.g. notify.mobile_app_xxx) - optional",
-          "notify_cooldown_hours": "N1 cooldown / N2 long summary (hours)",
-          "notify_short_summary_hours": "N2 short summary delay (hours, 0 disables)",
+          "notify_cooldown_hours": "Summary window / N1 cooldown (hours)",
+          "notify_upgrade_window_hours": "N1 upgrade window (hours, 0 disables)",
           "sustained_outage_short_minutes": "N3 short threshold (minutes, 0 disables)",
           "sustained_outage_long_hours": "N3 long threshold (hours, 0 disables)",
           "auto_reset_days": "Auto-reset statistics every N days (0 = never)"
@@ -49,7 +49,7 @@
     },
     "error": {
       "nothing_selected": "Pick at least one integration or one entity.",
-      "short_summary_too_long": "Short summary delay must be smaller than the cooldown."
+      "upgrade_window_too_long": "Upgrade window must be smaller than the summary window."
     }
   },
   "services": {
