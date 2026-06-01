@@ -87,4 +87,4 @@ SERVICE_RESET_ALL = "reset_all"
 SERVICE_TEST_NOTIFICATION = "test_notification"
 
 # Storage
-STORAGE_VERSION = 2
+STORAGE_VERSION = 1
