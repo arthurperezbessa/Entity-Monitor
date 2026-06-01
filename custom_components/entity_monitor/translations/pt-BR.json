@@ -3,25 +3,24 @@
     "step": {
       "user": {
         "title": "Entity Monitor",
-        "description": "Escolha integrações inteiras e/ou entidades específicas para monitorar, e ajuste os limites das notificações.",
+        "description": "Escolha as integrações e/ou entidades para monitorar. Entidades excluídas são ignoradas por completo.",
         "data": {
           "integrations": "Integrações para monitorar (todas as entidades delas)",
           "only_primary_entity": "Monitorar só a entidade principal de cada dispositivo",
           "entities": "Entidades extras para monitorar (individuais)",
+          "excluded_entities": "Entidades a ignorar",
           "seconds_threshold": "Confirmar queda após (segundos)",
           "coalesce_seconds": "Janela para tratar quedas simultâneas como uma (segundos)",
           "notify_service": "Serviço de notificação (ex: notify.mobile_app_xxx) - opcional",
-          "notify_cooldown_hours": "Janela do resumo N2 / cooldown do N1 (horas)",
-          "notify_upgrade_window_hours": "Janela do upgrade N1 (horas, 0 desliga)",
-          "sustained_outage_short_minutes": "Limite curto N3 (minutos, 0 desliga)",
-          "sustained_outage_long_hours": "Limite longo N3 (horas, 0 desliga)",
-          "auto_reset_days": "Zerar estatísticas a cada N dias (0 = nunca)"
+          "n1_burst_window_minutes": "Janela do N1.2 (minutos, 0 desliga)",
+          "n3_minutes_threshold": "Limiar de offline N3 (minutos, 0 desliga)",
+          "report_time_hour": "Hora do relatório diário (0-23, horário local)",
+          "auto_reset_days": "Zerar estatísticas e estado silencioso a cada N dias (0 = nunca)"
         }
       }
     },
     "error": {
-      "nothing_selected": "Escolha pelo menos uma integração ou uma entidade.",
-      "upgrade_window_too_long": "A janela do upgrade precisa ser menor que a janela do resumo."
+      "nothing_selected": "Escolha pelo menos uma integração ou uma entidade."
     },
     "abort": {
       "single_instance_allowed": "O Entity Monitor já está configurado."
@@ -36,20 +35,19 @@
           "integrations": "Integrações para monitorar (todas as entidades delas)",
           "only_primary_entity": "Monitorar só a entidade principal de cada dispositivo",
           "entities": "Entidades extras para monitorar (individuais)",
+          "excluded_entities": "Entidades a ignorar",
           "seconds_threshold": "Confirmar queda após (segundos)",
           "coalesce_seconds": "Janela para tratar quedas simultâneas como uma (segundos)",
           "notify_service": "Serviço de notificação (ex: notify.mobile_app_xxx) - opcional",
-          "notify_cooldown_hours": "Janela do resumo N2 / cooldown do N1 (horas)",
-          "notify_upgrade_window_hours": "Janela do upgrade N1 (horas, 0 desliga)",
-          "sustained_outage_short_minutes": "Limite curto N3 (minutos, 0 desliga)",
-          "sustained_outage_long_hours": "Limite longo N3 (horas, 0 desliga)",
-          "auto_reset_days": "Zerar estatísticas a cada N dias (0 = nunca)"
+          "n1_burst_window_minutes": "Janela do N1.2 (minutos, 0 desliga)",
+          "n3_minutes_threshold": "Limiar de offline N3 (minutos, 0 desliga)",
+          "report_time_hour": "Hora do relatório diário (0-23, horário local)",
+          "auto_reset_days": "Zerar estatísticas e estado silencioso a cada N dias (0 = nunca)"
         }
       }
     },
     "error": {
-      "nothing_selected": "Escolha pelo menos uma integração ou uma entidade.",
-      "upgrade_window_too_long": "A janela do upgrade precisa ser menor que a janela do resumo."
+      "nothing_selected": "Escolha pelo menos uma integração ou uma entidade."
     }
   },
   "services": {
@@ -59,7 +57,11 @@
     },
     "reset_statistics": {
       "name": "Resetar estatísticas",
-      "description": "Apaga todos os contadores de quedas e somas de tempo offline."
+      "description": "Apaga contadores cumulativos de quedas e somas de tempo offline."
+    },
+    "reset_all": {
+      "name": "Resetar tudo",
+      "description": "Zera estatísticas, estado por integração e registros de outage em curso."
     },
     "test_notification": {
       "name": "Enviar notificação de teste",
@@ -70,6 +72,9 @@
     "button": {
       "test_notification": {
         "name": "Testar notificação"
+      },
+      "reset_all": {
+        "name": "Resetar tudo"
       }
     }
   }

@@ -30,23 +30,22 @@ from .const import (
     CONF_AUTO_RESET_DAYS,
     CONF_COALESCE_SECONDS,
     CONF_ENTITIES,
+    CONF_EXCLUDED_ENTITIES,
     CONF_INTEGRATIONS,
-    CONF_NOTIFY_COOLDOWN_HOURS,
+    CONF_N1_BURST_WINDOW_MINUTES,
+    CONF_N3_MINUTES_THRESHOLD,
     CONF_NOTIFY_SERVICE,
-    CONF_NOTIFY_UPGRADE_WINDOW_HOURS,
     CONF_ONLY_PRIMARY,
+    CONF_REPORT_TIME_HOUR,
     CONF_SECONDS_THRESHOLD,
-    CONF_SUSTAINED_OUTAGE_LONG_HOURS,
-    CONF_SUSTAINED_OUTAGE_SHORT_MINUTES,
     DEFAULT_AUTO_RESET_DAYS,
     DEFAULT_COALESCE_SECONDS,
+    DEFAULT_N1_BURST_WINDOW_MINUTES,
+    DEFAULT_N3_MINUTES_THRESHOLD,
     DEFAULT_NAME,
-    DEFAULT_NOTIFY_COOLDOWN_HOURS,
-    DEFAULT_NOTIFY_UPGRADE_WINDOW_HOURS,
     DEFAULT_ONLY_PRIMARY,
+    DEFAULT_REPORT_TIME_HOUR,
     DEFAULT_SECONDS_THRESHOLD,
-    DEFAULT_SUSTAINED_OUTAGE_LONG_HOURS,
-    DEFAULT_SUSTAINED_OUTAGE_SHORT_MINUTES,
     DOMAIN,
 )
 
@@ -85,6 +84,10 @@ def _build_schema(
                 CONF_ENTITIES,
                 default=defaults.get(CONF_ENTITIES, []),
             ): EntitySelector(EntitySelectorConfig(multiple=True)),
+            vol.Optional(
+                CONF_EXCLUDED_ENTITIES,
+                default=defaults.get(CONF_EXCLUDED_ENTITIES, []),
+            ): EntitySelector(EntitySelectorConfig(multiple=True)),
             vol.Required(
                 CONF_SECONDS_THRESHOLD,
                 default=defaults.get(
@@ -118,40 +121,10 @@ def _build_schema(
                 default=defaults.get(CONF_NOTIFY_SERVICE, ""),
             ): TextSelector(),
             vol.Required(
-                CONF_NOTIFY_COOLDOWN_HOURS,
+                CONF_N1_BURST_WINDOW_MINUTES,
                 default=defaults.get(
-                    CONF_NOTIFY_COOLDOWN_HOURS,
-                    DEFAULT_NOTIFY_COOLDOWN_HOURS,
-                ),
-            ): NumberSelector(
-                NumberSelectorConfig(
-                    min=1,
-                    max=168,
-                    step=1,
-                    unit_of_measurement="h",
-                    mode=NumberSelectorMode.BOX,
-                )
-            ),
-            vol.Required(
-                CONF_NOTIFY_UPGRADE_WINDOW_HOURS,
-                default=defaults.get(
-                    CONF_NOTIFY_UPGRADE_WINDOW_HOURS,
-                    DEFAULT_NOTIFY_UPGRADE_WINDOW_HOURS,
-                ),
-            ): NumberSelector(
-                NumberSelectorConfig(
-                    min=0,
-                    max=168,
-                    step=1,
-                    unit_of_measurement="h",
-                    mode=NumberSelectorMode.BOX,
-                )
-            ),
-            vol.Required(
-                CONF_SUSTAINED_OUTAGE_SHORT_MINUTES,
-                default=defaults.get(
-                    CONF_SUSTAINED_OUTAGE_SHORT_MINUTES,
-                    DEFAULT_SUSTAINED_OUTAGE_SHORT_MINUTES,
+                    CONF_N1_BURST_WINDOW_MINUTES,
+                    DEFAULT_N1_BURST_WINDOW_MINUTES,
                 ),
             ): NumberSelector(
                 NumberSelectorConfig(
@@ -163,15 +136,29 @@ def _build_schema(
                 )
             ),
             vol.Required(
-                CONF_SUSTAINED_OUTAGE_LONG_HOURS,
+                CONF_N3_MINUTES_THRESHOLD,
                 default=defaults.get(
-                    CONF_SUSTAINED_OUTAGE_LONG_HOURS,
-                    DEFAULT_SUSTAINED_OUTAGE_LONG_HOURS,
+                    CONF_N3_MINUTES_THRESHOLD,
+                    DEFAULT_N3_MINUTES_THRESHOLD,
                 ),
             ): NumberSelector(
                 NumberSelectorConfig(
                     min=0,
-                    max=168,
+                    max=1440,
+                    step=1,
+                    unit_of_measurement="min",
+                    mode=NumberSelectorMode.BOX,
+                )
+            ),
+            vol.Required(
+                CONF_REPORT_TIME_HOUR,
+                default=defaults.get(
+                    CONF_REPORT_TIME_HOUR, DEFAULT_REPORT_TIME_HOUR
+                ),
+            ): NumberSelector(
+                NumberSelectorConfig(
+                    min=0,
+                    max=23,
                     step=1,
                     unit_of_measurement="h",
                     mode=NumberSelectorMode.BOX,
@@ -200,24 +187,20 @@ def _normalise(user_input: dict[str, Any]) -> dict[str, Any]:
     return {
         CONF_ENTITIES: user_input.get(CONF_ENTITIES, []),
         CONF_INTEGRATIONS: user_input.get(CONF_INTEGRATIONS, []),
+        CONF_EXCLUDED_ENTITIES: user_input.get(CONF_EXCLUDED_ENTITIES, []),
         CONF_ONLY_PRIMARY: bool(
             user_input.get(CONF_ONLY_PRIMARY, DEFAULT_ONLY_PRIMARY)
         ),
         CONF_SECONDS_THRESHOLD: int(user_input[CONF_SECONDS_THRESHOLD]),
         CONF_COALESCE_SECONDS: int(user_input[CONF_COALESCE_SECONDS]),
         CONF_NOTIFY_SERVICE: user_input.get(CONF_NOTIFY_SERVICE, "").strip(),
-        CONF_NOTIFY_COOLDOWN_HOURS: int(
-            user_input[CONF_NOTIFY_COOLDOWN_HOURS]
+        CONF_N1_BURST_WINDOW_MINUTES: int(
+            user_input[CONF_N1_BURST_WINDOW_MINUTES]
         ),
-        CONF_NOTIFY_UPGRADE_WINDOW_HOURS: int(
-            user_input[CONF_NOTIFY_UPGRADE_WINDOW_HOURS]
+        CONF_N3_MINUTES_THRESHOLD: int(
+            user_input[CONF_N3_MINUTES_THRESHOLD]
         ),
-        CONF_SUSTAINED_OUTAGE_SHORT_MINUTES: int(
-            user_input[CONF_SUSTAINED_OUTAGE_SHORT_MINUTES]
-        ),
-        CONF_SUSTAINED_OUTAGE_LONG_HOURS: int(
-            user_input[CONF_SUSTAINED_OUTAGE_LONG_HOURS]
-        ),
+        CONF_REPORT_TIME_HOUR: int(user_input[CONF_REPORT_TIME_HOUR]),
         CONF_AUTO_RESET_DAYS: int(
             user_input.get(CONF_AUTO_RESET_DAYS, DEFAULT_AUTO_RESET_DAYS)
         ),
@@ -230,12 +213,6 @@ def _validate(user_input: dict[str, Any]) -> dict[str, str]:
         CONF_INTEGRATIONS
     ):
         return {"base": "nothing_selected"}
-    upgrade_h = int(user_input.get(CONF_NOTIFY_UPGRADE_WINDOW_HOURS, 0))
-    cooldown_h = int(user_input.get(CONF_NOTIFY_COOLDOWN_HOURS, 0))
-    if upgrade_h and upgrade_h >= cooldown_h:
-        return {
-            CONF_NOTIFY_UPGRADE_WINDOW_HOURS: "upgrade_window_too_long",
-        }
     return {}
 
 
