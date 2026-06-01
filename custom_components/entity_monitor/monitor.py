@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from functools import partial
@@ -15,6 +16,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import (
     async_call_later,
     async_track_state_change_event,
+    async_track_time_change,
 )
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
@@ -23,40 +25,40 @@ from .const import (
     CONF_AUTO_RESET_DAYS,
     CONF_COALESCE_SECONDS,
     CONF_ENTITIES,
+    CONF_EXCLUDED_ENTITIES,
     CONF_INTEGRATIONS,
-    CONF_NOTIFY_COOLDOWN_HOURS,
+    CONF_N1_BURST_WINDOW_MINUTES,
+    CONF_N3_MINUTES_THRESHOLD,
     CONF_NOTIFY_SERVICE,
-    CONF_NOTIFY_SHORT_SUMMARY_HOURS,
     CONF_ONLY_PRIMARY,
+    CONF_REPORT_TIME_HOUR,
     CONF_SECONDS_THRESHOLD,
-    CONF_SUSTAINED_OUTAGE_LONG_HOURS,
-    CONF_SUSTAINED_OUTAGE_SHORT_MINUTES,
     DEFAULT_AUTO_RESET_DAYS,
     DEFAULT_COALESCE_SECONDS,
-    DEFAULT_NOTIFY_COOLDOWN_HOURS,
-    DEFAULT_NOTIFY_SHORT_SUMMARY_HOURS,
+    DEFAULT_N1_BURST_WINDOW_MINUTES,
+    DEFAULT_N3_MINUTES_THRESHOLD,
     DEFAULT_ONLY_PRIMARY,
+    DEFAULT_REPORT_TIME_HOUR,
     DEFAULT_SECONDS_THRESHOLD,
-    DEFAULT_SUSTAINED_OUTAGE_LONG_HOURS,
-    DEFAULT_SUSTAINED_OUTAGE_SHORT_MINUTES,
     DOMAIN,
     EVENT_NOTIFICATION,
     EVENT_RECOVERED,
     EVENT_UNAVAILABLE,
-    LEVEL_HOURS,
     LEVEL_MINUTES,
     LEVEL_SECONDS,
-    NOTIFY_N1,
-    NOTIFY_N1_UPGRADE,
-    NOTIFY_N2_LONG,
-    NOTIFY_N2_SHORT,
-    NOTIFY_N3_LONG,
-    NOTIFY_N3_SHORT,
+    NOTIFY_N1_1,
+    NOTIFY_N1_2,
+    NOTIFY_N2,
+    NOTIFY_N3_1,
+    NOTIFY_N3_2,
     NOTIFY_TEST,
     PRIMARY_DOMAIN_ORDER,
     SCOPE_ENTITY,
     SCOPE_INTEGRATION,
     SIGNAL_UPDATE,
+    STATE_ACTIVE_DAY1,
+    STATE_QUIET,
+    STATE_SILENT,
     STORAGE_VERSION,
 )
 
@@ -70,12 +72,24 @@ def format_duration(seconds: float) -> str:
         return f"{seconds}s"
     minutes, sec = divmod(seconds, 60)
     if minutes < 60:
-        return f"{minutes}m {sec}s"
+        return f"{minutes}m {sec}s" if sec else f"{minutes}m"
     hours, minutes = divmod(minutes, 60)
     if hours < 24:
-        return f"{hours}h {minutes}m"
+        return f"{hours}h {minutes}m" if minutes else f"{hours}h"
     days, hours = divmod(hours, 24)
-    return f"{days}d {hours}h"
+    return f"{days}d {hours}h" if hours else f"{days}d"
+
+
+def _parse_dt(value: str | None) -> datetime | None:
+    """Parse an ISO timestamp coming back from storage."""
+    if not value:
+        return None
+    return dt_util.parse_datetime(value)
+
+
+def _iso(value: datetime | None) -> str | None:
+    """Render a datetime as an ISO timestamp (or None)."""
+    return value.isoformat() if value is not None else None
 
 
 @dataclass
@@ -83,8 +97,8 @@ class EntityStats:
     """Persisted outage statistics for a single entity."""
 
     outage_count: int = 0
-    total_downtime: float = 0.0  # seconds
-    longest_outage: float = 0.0  # seconds
+    total_downtime: float = 0.0
+    longest_outage: float = 0.0
     last_outage_start: str | None = None
     last_outage_end: str | None = None
 
@@ -112,14 +126,10 @@ class EntityStats:
 
 @dataclass
 class IntegrationStats:
-    """Persisted outage statistics aggregated per integration.
-
-    Outages here are counted as *bursts*: when several entities of the same
-    integration drop together within the coalesce window it counts as one.
-    """
+    """Persisted outage statistics aggregated per integration."""
 
     burst_count: int = 0
-    total_downtime: float = 0.0  # seconds
+    total_downtime: float = 0.0
     last_burst_start: str | None = None
     last_burst_end: str | None = None
 
@@ -154,12 +164,7 @@ class OngoingOutage:
 
 @dataclass
 class IntegrationBurst:
-    """A group of entities of one integration that went down together.
-
-    Entities that become unavailable within the coalesce window of the burst
-    start belong to the same burst, so a hub taking 30 entities offline at
-    once counts as a single outage event.
-    """
+    """A group of entities of one integration that went down together."""
 
     integration: str
     started: datetime
@@ -167,27 +172,124 @@ class IntegrationBurst:
     active: set[str] = field(default_factory=set)
     ended: datetime | None = None
 
+    def as_dict(self) -> dict:
+        """Serialise for storage (only what's needed for daily reports)."""
+        return {
+            "integration": self.integration,
+            "started": _iso(self.started),
+            "entities": list(self.entities),
+            "ended": _iso(self.ended),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "IntegrationBurst":
+        """Restore from storage."""
+        started = _parse_dt(data.get("started")) or dt_util.utcnow()
+        ended = _parse_dt(data.get("ended"))
+        entities = list(data.get("entities", []))
+        return cls(
+            integration=data.get("integration", ""),
+            started=started,
+            entities=entities,
+            active=set(),  # all entities of a restored burst are considered closed
+            ended=ended,
+        )
+
 
 @dataclass
-class NotificationCycle:
-    """Tracks the N1/N2 notification state of one integration."""
+class OutageInterval:
+    """An outage segment contributing to the current daily cycle."""
 
-    started_at: datetime
-    kind: str  # SCOPE_ENTITY or SCOPE_INTEGRATION
-    notified_entity_id: str | None
-    upgraded: bool = False
-    bursts: list[IntegrationBurst] = field(default_factory=list)
-    short_summary_fired: bool = False
-    short_summary_cancel: CALLBACK_TYPE | None = None
-    long_summary_cancel: CALLBACK_TYPE | None = None
+    entity_id: str
+    start: datetime
+    end: datetime | None = None  # None = still ongoing in this cycle
+
+    def as_dict(self) -> dict:
+        """Serialise for storage."""
+        return {
+            "entity_id": self.entity_id,
+            "start": _iso(self.start),
+            "end": _iso(self.end),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "OutageInterval":
+        """Restore from storage."""
+        start = _parse_dt(data.get("start")) or dt_util.utcnow()
+        return cls(
+            entity_id=data.get("entity_id", ""),
+            start=start,
+            end=_parse_dt(data.get("end")),
+        )
 
 
 @dataclass
-class IntegrationN3State:
-    """Tracks which sustained-outage notifications have fired."""
+class IntegrationCycleState:
+    """Per-integration state machine + buffer for the current daily cycle."""
 
-    short_state: str | None = None  # None / "entity:<id>" / "integration"
-    long_state: str | None = None
+    state: str = STATE_QUIET
+    last_drop_at: datetime | None = None
+    first_drop_at_in_period: datetime | None = None
+    n11_fired: bool = False
+    n12_fired: bool = False
+    n31_fired: bool = False
+    cycle_bursts: list[IntegrationBurst] = field(default_factory=list)
+    cycle_intervals: list[OutageInterval] = field(default_factory=list)
+
+    def as_dict(self) -> dict:
+        """Serialise for storage."""
+        return {
+            "state": self.state,
+            "last_drop_at": _iso(self.last_drop_at),
+            "first_drop_at_in_period": _iso(self.first_drop_at_in_period),
+            "n11_fired": self.n11_fired,
+            "n12_fired": self.n12_fired,
+            "n31_fired": self.n31_fired,
+            "cycle_bursts": [b.as_dict() for b in self.cycle_bursts],
+            "cycle_intervals": [i.as_dict() for i in self.cycle_intervals],
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "IntegrationCycleState":
+        """Restore from storage."""
+        return cls(
+            state=data.get("state", STATE_QUIET),
+            last_drop_at=_parse_dt(data.get("last_drop_at")),
+            first_drop_at_in_period=_parse_dt(
+                data.get("first_drop_at_in_period")
+            ),
+            n11_fired=data.get("n11_fired", False),
+            n12_fired=data.get("n12_fired", False),
+            n31_fired=data.get("n31_fired", False),
+            cycle_bursts=[
+                IntegrationBurst.from_dict(b)
+                for b in data.get("cycle_bursts", [])
+            ],
+            cycle_intervals=[
+                OutageInterval.from_dict(i)
+                for i in data.get("cycle_intervals", [])
+            ],
+        )
+
+
+def _union_seconds(
+    intervals: list[tuple[datetime, datetime]],
+) -> float:
+    """Return the total duration covered by a union of (start, end) intervals."""
+    if not intervals:
+        return 0.0
+    sorted_intervals = sorted(intervals, key=lambda i: i[0])
+    total = 0.0
+    cur_start, cur_end = sorted_intervals[0]
+    for start, end in sorted_intervals[1:]:
+        if start <= cur_end:
+            if end > cur_end:
+                cur_end = end
+        else:
+            total += (cur_end - cur_start).total_seconds()
+            cur_start, cur_end = start, end
+    total += (cur_end - cur_start).total_seconds()
+    return total
 
 
 class EntityMonitor:
@@ -200,17 +302,13 @@ class EntityMonitor:
         self.stats: dict[str, EntityStats] = {}
         self.integration_stats: dict[str, IntegrationStats] = {}
         self._ongoing: dict[str, OngoingOutage] = {}
+        self._stored_outage_starts: dict[str, datetime] = {}
+        self._integration_state: dict[str, IntegrationCycleState] = {}
         self._unsub_state: CALLBACK_TYPE | None = None
-        # Burst / notification bookkeeping, kept in memory only. A restart
-        # simply allows the next outage to start a fresh burst.
-        self._bursts: dict[str, list[IntegrationBurst]] = {}
-        self._entity_burst: dict[str, IntegrationBurst] = {}
-        self._flush_timers: dict[str, CALLBACK_TYPE] = {}
-        self._cycle: dict[str, NotificationCycle] = {}
-        self._n3_state: dict[str, IntegrationN3State] = {}
         self._integration_names: dict[str, str] = {}
         self._last_reset_at: datetime | None = None
         self._auto_reset_cancel: CALLBACK_TYPE | None = None
+        self._unsub_report_tick: CALLBACK_TYPE | None = None
         self._store: Store = Store(
             hass, STORAGE_VERSION, f"{DOMAIN}.{entry.entry_id}"
         )
@@ -228,6 +326,11 @@ class EntityMonitor:
         return list(self.entry.options.get(CONF_INTEGRATIONS, []))
 
     @property
+    def excluded_entities(self) -> set[str]:
+        """Return the entity ids that must be ignored entirely."""
+        return set(self.entry.options.get(CONF_EXCLUDED_ENTITIES, []))
+
+    @property
     def only_primary_entity(self) -> bool:
         """Return whether to keep only one entity per device per integration."""
         return bool(
@@ -236,54 +339,10 @@ class EntityMonitor:
 
     @property
     def seconds_threshold(self) -> int:
-        """Return the short (seconds) alert threshold."""
+        """Return the seconds an entity must stay offline to confirm a drop."""
         return int(
             self.entry.options.get(
                 CONF_SECONDS_THRESHOLD, DEFAULT_SECONDS_THRESHOLD
-            )
-        )
-
-    @property
-    def sustained_outage_short_minutes(self) -> int:
-        """Return the first sustained-outage threshold, in minutes."""
-        return int(
-            self.entry.options.get(
-                CONF_SUSTAINED_OUTAGE_SHORT_MINUTES,
-                DEFAULT_SUSTAINED_OUTAGE_SHORT_MINUTES,
-            )
-        )
-
-    @property
-    def sustained_outage_long_hours(self) -> int:
-        """Return the second sustained-outage threshold, in hours."""
-        return int(
-            self.entry.options.get(
-                CONF_SUSTAINED_OUTAGE_LONG_HOURS,
-                DEFAULT_SUSTAINED_OUTAGE_LONG_HOURS,
-            )
-        )
-
-    @property
-    def notify_service(self) -> str:
-        """Return the notify service to call, e.g. ``notify.mobile_app_x``."""
-        return str(self.entry.options.get(CONF_NOTIFY_SERVICE, "")).strip()
-
-    @property
-    def notify_cooldown_hours(self) -> int:
-        """Return the N1 cooldown window, also the N2-long summary window."""
-        return int(
-            self.entry.options.get(
-                CONF_NOTIFY_COOLDOWN_HOURS, DEFAULT_NOTIFY_COOLDOWN_HOURS
-            )
-        )
-
-    @property
-    def notify_short_summary_hours(self) -> int:
-        """Return the N2-short summary delay, in hours (0 disables it)."""
-        return int(
-            self.entry.options.get(
-                CONF_NOTIFY_SHORT_SUMMARY_HOURS,
-                DEFAULT_NOTIFY_SHORT_SUMMARY_HOURS,
             )
         )
 
@@ -297,8 +356,42 @@ class EntityMonitor:
         )
 
     @property
+    def n1_burst_window_minutes(self) -> int:
+        """Return how many minutes the N1.2 escalation window lasts (0 disables)."""
+        return int(
+            self.entry.options.get(
+                CONF_N1_BURST_WINDOW_MINUTES,
+                DEFAULT_N1_BURST_WINDOW_MINUTES,
+            )
+        )
+
+    @property
+    def n3_minutes_threshold(self) -> int:
+        """Return the minutes used by both N3.1 and N3.2 (0 disables N3)."""
+        return int(
+            self.entry.options.get(
+                CONF_N3_MINUTES_THRESHOLD, DEFAULT_N3_MINUTES_THRESHOLD
+            )
+        )
+
+    @property
+    def report_time_hour(self) -> int:
+        """Return the local hour at which daily reports fire (0-23)."""
+        value = int(
+            self.entry.options.get(
+                CONF_REPORT_TIME_HOUR, DEFAULT_REPORT_TIME_HOUR
+            )
+        )
+        return max(0, min(23, value))
+
+    @property
+    def notify_service(self) -> str:
+        """Return the notify service to call, e.g. ``notify.mobile_app_x``."""
+        return str(self.entry.options.get(CONF_NOTIFY_SERVICE, "")).strip()
+
+    @property
     def auto_reset_days(self) -> int:
-        """Return after how many days statistics auto-reset (0 = never)."""
+        """Return after how many days stats and silent state auto-reset."""
         return int(
             self.entry.options.get(
                 CONF_AUTO_RESET_DAYS, DEFAULT_AUTO_RESET_DAYS
@@ -349,6 +442,16 @@ class EntityMonitor:
             parsed = dt_util.parse_datetime(last_reset)
             if parsed is not None:
                 self._last_reset_at = parsed
+        if "integration_state" in data:
+            self._integration_state = {
+                integration: IntegrationCycleState.from_dict(raw)
+                for integration, raw in data["integration_state"].items()
+            }
+        if "ongoing_outages" in data:
+            for entity_id, raw in data["ongoing_outages"].items():
+                started = _parse_dt(raw)
+                if started is not None:
+                    self._stored_outage_starts[entity_id] = started
 
     async def async_start(self) -> None:
         """Begin watching the configured entities."""
@@ -361,23 +464,33 @@ class EntityMonitor:
                 self.hass, entities, self._handle_state_change
             )
 
-        # Capture entities that are already unavailable at startup.
+        # Restore any outage that was in progress before HA went down so the
+        # duration counts from the original drop, not from boot time.
         for eid in entities:
             state = self.hass.states.get(eid)
-            if state is not None and state.state == STATE_UNAVAILABLE:
-                self._start_outage(eid)
+            if state is None or state.state != STATE_UNAVAILABLE:
+                self._stored_outage_starts.pop(eid, None)
+                continue
+            started = self._stored_outage_starts.pop(eid, None)
+            self._start_outage(eid, started_override=started)
 
+        self._stored_outage_starts.clear()
         self._schedule_auto_reset()
+        self._schedule_report_tick()
+        self._store.async_delay_save(self._data_for_storage, 5)
 
     def _resolved_entities(self) -> list[str]:
         """Expand integrations + explicit entities into the watch list."""
         explicit = self.entities
         integrations = set(self.integrations)
+        excluded = self.excluded_entities
 
         ids: list[str] = []
         seen: set[str] = set()
 
         def add(eid: str) -> None:
+            if eid in excluded:
+                return
             if eid not in seen:
                 seen.add(eid)
                 ids.append(eid)
@@ -396,6 +509,7 @@ class EntityMonitor:
             and entry.entity_category is None
             and entry.disabled_by is None
             and entry.hidden_by is None
+            and entry.entity_id not in excluded
         ]
 
         if self.only_primary_entity:
@@ -442,19 +556,13 @@ class EntityMonitor:
         if self._unsub_state is not None:
             self._unsub_state()
             self._unsub_state = None
+        if self._unsub_report_tick is not None:
+            self._unsub_report_tick()
+            self._unsub_report_tick = None
         for outage in self._ongoing.values():
             for cancel in outage.timers:
                 cancel()
         self._ongoing.clear()
-        for cancel in self._flush_timers.values():
-            cancel()
-        self._flush_timers.clear()
-        for cycle in self._cycle.values():
-            if cycle.short_summary_cancel is not None:
-                cycle.short_summary_cancel()
-            if cycle.long_summary_cancel is not None:
-                cycle.long_summary_cancel()
-        self._cycle.clear()
         if self._auto_reset_cancel is not None:
             self._auto_reset_cancel()
             self._auto_reset_cancel = None
@@ -475,34 +583,65 @@ class EntityMonitor:
             self._end_outage(entity_id)
 
     @callback
-    def _start_outage(self, entity_id: str) -> None:
+    def _start_outage(
+        self, entity_id: str, started_override: datetime | None = None
+    ) -> None:
         """Record the start of an outage and schedule the alert timers."""
         now = dt_util.utcnow()
-        timers: list[CALLBACK_TYPE] = [
-            async_call_later(
-                self.hass,
-                self.seconds_threshold,
-                partial(self._fire_alert, entity_id, LEVEL_SECONDS),
-            ),
-        ]
-        if self.sustained_outage_short_minutes > 0:
+        started = started_override or now
+        elapsed = (now - started).total_seconds()
+
+        integration = self._integration_of(entity_id)
+        state = self._integration_state.setdefault(
+            integration, IntegrationCycleState()
+        )
+
+        # Levels already settled before the restart shouldn't fire again.
+        pre_fired: set[str] = set()
+        if any(entity_id in b.entities for b in state.cycle_bursts):
+            pre_fired.add(LEVEL_SECONDS)
+        if state.n31_fired:
+            pre_fired.add(LEVEL_MINUTES)
+
+        timers: list[CALLBACK_TYPE] = []
+
+        def schedule(level: str, target_seconds: int) -> None:
+            if level in pre_fired:
+                return
+            remaining = max(target_seconds - elapsed, 0)
             timers.append(
                 async_call_later(
                     self.hass,
-                    self.sustained_outage_short_minutes * 60,
-                    partial(self._fire_alert, entity_id, LEVEL_MINUTES),
+                    remaining,
+                    partial(self._fire_alert, entity_id, level),
                 )
             )
-        if self.sustained_outage_long_hours > 0:
-            timers.append(
-                async_call_later(
-                    self.hass,
-                    self.sustained_outage_long_hours * 3600,
-                    partial(self._fire_alert, entity_id, LEVEL_HOURS),
-                )
+
+        schedule(LEVEL_SECONDS, self.seconds_threshold)
+        if self.n3_minutes_threshold > 0:
+            schedule(LEVEL_MINUTES, self.n3_minutes_threshold * 60)
+
+        self._ongoing[entity_id] = OngoingOutage(
+            started=started, timers=timers, alerts_fired=pre_fired
+        )
+
+        # Reuse the persisted open interval if it already represents this drop.
+        existing_open = any(
+            iv.entity_id == entity_id and iv.end is None
+            for iv in state.cycle_intervals
+        )
+        if not existing_open:
+            state.cycle_intervals.append(
+                OutageInterval(entity_id=entity_id, start=started, end=None)
             )
-        self._ongoing[entity_id] = OngoingOutage(started=now, timers=timers)
-        _LOGGER.debug("Entity %s became unavailable", entity_id)
+
+        _LOGGER.debug(
+            "Entity %s became unavailable (started=%s, restored=%s)",
+            entity_id,
+            started.isoformat(),
+            started_override is not None,
+        )
+        self._store.async_delay_save(self._data_for_storage, 5)
         async_dispatcher_send(self.hass, SIGNAL_UPDATE)
 
     @callback
@@ -513,7 +652,8 @@ class EntityMonitor:
             return
 
         outage.alerts_fired.add(level)
-        duration = (dt_util.utcnow() - outage.started).total_seconds()
+        now = dt_util.utcnow()
+        duration = (now - outage.started).total_seconds()
         threshold = self._threshold_seconds(level)
         self.hass.bus.async_fire(
             EVENT_UNAVAILABLE,
@@ -533,15 +673,10 @@ class EntityMonitor:
             format_duration(threshold),
             level,
         )
-        # Hook the alert into the higher-level notification system.
         if level == LEVEL_SECONDS:
-            # Treat the seconds threshold as the "confirmed offline" moment
-            # and attach the entity to a burst for its integration.
-            self._assign_to_burst(entity_id)
+            self._on_confirmed_drop(entity_id, outage)
         elif level == LEVEL_MINUTES:
-            self._evaluate_n3(entity_id, "short")
-        elif level == LEVEL_HOURS:
-            self._evaluate_n3(entity_id, "long")
+            self._evaluate_n3_1(entity_id)
         async_dispatcher_send(self.hass, SIGNAL_UPDATE)
 
     def _threshold_seconds(self, level: str) -> int:
@@ -549,9 +684,7 @@ class EntityMonitor:
         if level == LEVEL_SECONDS:
             return self.seconds_threshold
         if level == LEVEL_MINUTES:
-            return self.sustained_outage_short_minutes * 60
-        if level == LEVEL_HOURS:
-            return self.sustained_outage_long_hours * 3600
+            return self.n3_minutes_threshold * 60
         return 0
 
     @callback
@@ -575,13 +708,17 @@ class EntityMonitor:
         stats.last_outage_end = now.isoformat()
 
         integration = self._integration_of(entity_id)
-        self._close_burst_entity(entity_id, now)
+        self._close_cycle_interval(integration, entity_id, now)
+        self._close_integration_burst(integration, entity_id, now)
 
-        # Clear the N3 state once every entity of the integration is back.
+        # Clear the N3.1 latch once every entity of the integration is back so
+        # a future outage can fire its own notification.
         if not any(
             self._integration_of(e) == integration for e in self._ongoing
         ):
-            self._n3_state.pop(integration, None)
+            state = self._integration_state.get(integration)
+            if state is not None:
+                state.n31_fired = False
 
         self.hass.bus.async_fire(
             EVENT_RECOVERED,
@@ -597,18 +734,24 @@ class EntityMonitor:
         _LOGGER.info(
             "%s recovered after %s", entity_id, format_duration(duration)
         )
-        self._store.async_delay_save(self._data_for_storage, 10)
+        self._store.async_delay_save(self._data_for_storage, 5)
         async_dispatcher_send(self.hass, SIGNAL_UPDATE)
 
     # -- Burst tracking --------------------------------------------------------
 
     @callback
-    def _assign_to_burst(self, entity_id: str) -> None:
-        """Attach a confirmed outage to a burst, creating one when needed."""
+    def _on_confirmed_drop(
+        self, entity_id: str, outage: OngoingOutage
+    ) -> None:
+        """Handle the seconds-threshold being reached for an entity."""
         integration = self._integration_of(entity_id)
+        state = self._integration_state.setdefault(
+            integration, IntegrationCycleState()
+        )
+
         now = dt_util.utcnow()
         window = self.coalesce_seconds
-        bursts = self._bursts.setdefault(integration, [])
+        bursts = state.cycle_bursts
         current = bursts[-1] if bursts else None
 
         if (
@@ -616,14 +759,15 @@ class EntityMonitor:
             and current.ended is None
             and (now - current.started).total_seconds() <= window
         ):
-            # Joins the open burst: simultaneous drop, not a new event.
+            # Joins the burst that's still inside its coalesce window.
             if entity_id not in current.entities:
                 current.entities.append(entity_id)
             current.active.add(entity_id)
-            self._entity_burst[entity_id] = current
+            self._update_integration_stats(integration, new_burst=False)
+            self._store.async_delay_save(self._data_for_storage, 5)
+            async_dispatcher_send(self.hass, SIGNAL_UPDATE)
             return
 
-        # A new outage event for this integration.
         burst = IntegrationBurst(
             integration=integration,
             started=now,
@@ -631,206 +775,153 @@ class EntityMonitor:
             active={entity_id},
         )
         bursts.append(burst)
-        self._entity_burst[entity_id] = burst
+        self._update_integration_stats(integration, new_burst=True)
+        self._process_new_burst(integration, burst, state)
+        self._store.async_delay_save(self._data_for_storage, 5)
+        async_dispatcher_send(self.hass, SIGNAL_UPDATE)
 
+    def _update_integration_stats(
+        self, integration: str, *, new_burst: bool
+    ) -> None:
+        """Bump the cumulative integration statistics."""
         istats = self.integration_stats.setdefault(
             integration, IntegrationStats()
         )
-        istats.burst_count += 1
-        istats.last_burst_start = now.isoformat()
-        self._store.async_delay_save(self._data_for_storage, 10)
-        self._prune_bursts(integration)
-
-        # Wait the coalesce window so the notification can include every
-        # entity that drops together, then evaluate the notification.
-        if integration in self._flush_timers:
-            self._flush_timers[integration]()
-        self._flush_timers[integration] = async_call_later(
-            self.hass, window, partial(self._flush_burst, integration, burst)
-        )
+        now = dt_util.utcnow()
+        if new_burst:
+            istats.burst_count += 1
+            istats.last_burst_start = now.isoformat()
 
     @callback
-    def _close_burst_entity(self, entity_id: str, now: datetime) -> None:
+    def _close_integration_burst(
+        self, integration: str, entity_id: str, now: datetime
+    ) -> None:
         """Mark an entity as recovered within its burst."""
-        burst = self._entity_burst.pop(entity_id, None)
-        if burst is None:
+        state = self._integration_state.get(integration)
+        if state is None:
             return
-        burst.active.discard(entity_id)
-        if burst.active or burst.ended is not None:
-            return
-        # Every entity of the burst recovered: the integration is back.
-        burst.ended = now
-        istats = self.integration_stats.setdefault(
-            burst.integration, IntegrationStats()
-        )
-        istats.total_downtime += (now - burst.started).total_seconds()
-        istats.last_burst_end = now.isoformat()
-        self._store.async_delay_save(self._data_for_storage, 10)
+        for burst in reversed(state.cycle_bursts):
+            if burst.ended is not None:
+                continue
+            if entity_id in burst.active:
+                burst.active.discard(entity_id)
+                if not burst.active:
+                    burst.ended = now
+                    istats = self.integration_stats.setdefault(
+                        integration, IntegrationStats()
+                    )
+                    istats.total_downtime += (
+                        now - burst.started
+                    ).total_seconds()
+                    istats.last_burst_end = now.isoformat()
+                return
 
     @callback
-    def _prune_bursts(self, integration: str) -> None:
-        """Drop bursts that are finished and not referenced by an active cycle."""
-        cycle = self._cycle.get(integration)
-        cycle_bursts: set[int] = (
-            {id(b) for b in cycle.bursts} if cycle is not None else set()
-        )
-        bursts = self._bursts.get(integration, [])
-        self._bursts[integration] = [
-            b
-            for b in bursts
-            if b.ended is None or id(b) in cycle_bursts
-        ]
+    def _close_cycle_interval(
+        self, integration: str, entity_id: str, now: datetime
+    ) -> None:
+        """Close the open outage interval associated with an entity."""
+        state = self._integration_state.get(integration)
+        if state is None:
+            return
+        for iv in reversed(state.cycle_intervals):
+            if iv.entity_id == entity_id and iv.end is None:
+                iv.end = now
+                return
 
-    # -- Notifications ---------------------------------------------------------
+    # -- N1 state machine ------------------------------------------------------
 
     @callback
-    def _flush_burst(
+    def _process_new_burst(
         self,
         integration: str,
         burst: IntegrationBurst,
-        _now: datetime,
+        state: IntegrationCycleState,
     ) -> None:
-        """Run once the coalesce window closed for a freshly opened burst."""
-        self._flush_timers.pop(integration, None)
-        self._process_burst(integration, burst)
+        """Run the N1 state machine when a new burst has just opened."""
+        now = dt_util.utcnow()
+        state.last_drop_at = now
 
-    @callback
-    def _process_burst(
-        self, integration: str, burst: IntegrationBurst
-    ) -> None:
-        """Either open a new notification cycle or fold the burst into one."""
-        cycle = self._cycle.get(integration)
-
-        if cycle is None:
-            self._start_cycle(integration, burst)
+        if state.state == STATE_QUIET:
+            state.state = STATE_ACTIVE_DAY1
+            state.first_drop_at_in_period = now
+            state.n11_fired = True
+            state.n12_fired = False
+            self._dispatch_n1_1(integration, burst)
             return
 
-        # Cooldown is active: accumulate the burst for the summaries.
-        if burst not in cycle.bursts:
-            cycle.bursts.append(burst)
+        if state.state == STATE_ACTIVE_DAY1 and not state.n12_fired:
+            if state.first_drop_at_in_period is None:
+                state.first_drop_at_in_period = now
+            window = self.n1_burst_window_minutes * 60
+            elapsed = (
+                now - state.first_drop_at_in_period
+            ).total_seconds()
+            burst_count = len(state.cycle_bursts)
+            if (
+                window > 0
+                and elapsed <= window
+                and burst_count >= 2
+            ):
+                state.n12_fired = True
+                self._dispatch_n1_2(integration, state, burst_count)
 
-        # Upgrade the cycle to integration-scope if a different entity drops.
-        if cycle.kind == SCOPE_ENTITY and not cycle.upgraded:
-            others = [
-                e
-                for e in burst.entities
-                if e != cycle.notified_entity_id
-            ]
-            if others or len(burst.entities) > 1:
-                cycle.kind = SCOPE_INTEGRATION
-                cycle.upgraded = True
-                self._dispatch_notification(
-                    integration=integration,
-                    kind=NOTIFY_N1_UPGRADE,
-                    scope=SCOPE_INTEGRATION,
-                )
+        # In STATE_SILENT (or after N1.2 fired) drops simply accumulate.
 
     @callback
-    def _start_cycle(
+    def _dispatch_n1_1(
         self, integration: str, burst: IntegrationBurst
     ) -> None:
-        """Open a fresh notification cycle for an integration and fire N1."""
-        now = dt_util.utcnow()
-        if len(burst.entities) == 1:
-            scope = SCOPE_ENTITY
-            notified_eid: str | None = burst.entities[0]
-        else:
-            scope = SCOPE_INTEGRATION
-            notified_eid = None
-
-        cycle = NotificationCycle(
-            started_at=now,
-            kind=scope,
-            notified_entity_id=notified_eid,
-            bursts=[burst],
+        """Fire the N1.1 notification for the first drop of a fresh period."""
+        scope, entity_id, entity_name, has_others = self._scope_for_entities(
+            burst.entities
         )
-        self._cycle[integration] = cycle
-
         self._dispatch_notification(
             integration=integration,
-            kind=NOTIFY_N1,
+            kind=NOTIFY_N1_1,
             scope=scope,
-            entity_id=notified_eid,
-        )
-
-        cooldown_h = self.notify_cooldown_hours
-        short_h = self.notify_short_summary_hours
-        if 0 < short_h < cooldown_h:
-            cycle.short_summary_cancel = async_call_later(
-                self.hass,
-                short_h * 3600,
-                partial(self._fire_summary, integration, "short"),
-            )
-        cycle.long_summary_cancel = async_call_later(
-            self.hass,
-            cooldown_h * 3600,
-            partial(self._fire_summary, integration, "long"),
+            entity_id=entity_id,
+            entity_name=entity_name,
+            has_others=has_others,
         )
 
     @callback
-    def _fire_summary(
-        self, integration: str, summary: str, _now: datetime
+    def _dispatch_n1_2(
+        self,
+        integration: str,
+        state: IntegrationCycleState,
+        burst_count: int,
     ) -> None:
-        """Fire an N2 summary (short or long) for the active cycle."""
-        cycle = self._cycle.get(integration)
-        if cycle is None:
-            return
+        """Fire the N1.2 notification for repeated drops."""
+        most_eid = self._most_frequent_entity(state.cycle_bursts)
+        unique = self._unique_entities(state.cycle_bursts)
+        scope = SCOPE_INTEGRATION if len(unique) > 1 else SCOPE_ENTITY
+        has_others = len(unique) > 1
+        self._dispatch_notification(
+            integration=integration,
+            kind=NOTIFY_N1_2,
+            scope=scope,
+            entity_id=most_eid,
+            entity_name=self._friendly_name(most_eid) if most_eid else "",
+            has_others=has_others,
+            outage_count=burst_count,
+            window_minutes=self.n1_burst_window_minutes,
+        )
 
-        burst_count = len(cycle.bursts)
-
-        if summary == "short":
-            cycle.short_summary_cancel = None
-            cycle.short_summary_fired = True
-            notify_kind = NOTIFY_N2_SHORT
-            window_hours = self.notify_short_summary_hours
-        else:
-            cycle.long_summary_cancel = None
-            notify_kind = NOTIFY_N2_LONG
-            window_hours = self.notify_cooldown_hours
-
-        if burst_count >= 2:
-            self._dispatch_notification(
-                integration=integration,
-                kind=notify_kind,
-                scope=cycle.kind,
-                entity_id=cycle.notified_entity_id,
-                outage_count=burst_count,
-                window_hours=window_hours,
-            )
-
-        if summary == "long":
-            self._end_cycle(integration)
+    # -- N3.1: sustained outage -----------------------------------------------
 
     @callback
-    def _end_cycle(self, integration: str) -> None:
-        """Close out an integration's notification cycle."""
-        cycle = self._cycle.pop(integration, None)
-        if cycle is None:
+    def _evaluate_n3_1(self, entity_id: str) -> None:
+        """Fire N3.1 when an entity crosses the sustained-outage threshold."""
+        threshold_seconds = self.n3_minutes_threshold * 60
+        if threshold_seconds <= 0:
             return
-        if cycle.short_summary_cancel is not None:
-            cycle.short_summary_cancel()
-        if cycle.long_summary_cancel is not None:
-            cycle.long_summary_cancel()
-        self._prune_bursts(integration)
 
-    # -- N3: sustained-outage notifications -----------------------------------
-
-    @callback
-    def _evaluate_n3(self, entity_id: str, level: str) -> None:
-        """Decide whether the sustained-outage threshold notification fires."""
         integration = self._integration_of(entity_id)
-        state = self._n3_state.setdefault(integration, IntegrationN3State())
-
-        if level == "short":
-            threshold_seconds = self.sustained_outage_short_minutes * 60
-            current = state.short_state
-            notify_kind = NOTIFY_N3_SHORT
-        else:
-            threshold_seconds = self.sustained_outage_long_hours * 3600
-            current = state.long_state
-            notify_kind = NOTIFY_N3_LONG
-
-        if threshold_seconds <= 0 or current == "integration":
+        state = self._integration_state.setdefault(
+            integration, IntegrationCycleState()
+        )
+        if state.n31_fired:
             return
 
         now = dt_util.utcnow()
@@ -840,56 +931,170 @@ class EntityMonitor:
             if self._integration_of(e) == integration
             and (now - outage.started).total_seconds() >= threshold_seconds
         ]
-        count = len(qualified)
-
-        if count == 0:
+        if not qualified:
             return
 
-        if current is None:
-            if count >= 2:
-                new_state = "integration"
-                self._dispatch_notification(
-                    integration=integration,
-                    kind=notify_kind,
-                    scope=SCOPE_INTEGRATION,
-                    threshold_seconds=threshold_seconds,
-                )
-            else:
-                new_state = f"entity:{entity_id}"
-                self._dispatch_notification(
-                    integration=integration,
-                    kind=notify_kind,
-                    scope=SCOPE_ENTITY,
-                    entity_id=entity_id,
-                    threshold_seconds=threshold_seconds,
-                )
-        else:
-            prev = current.split(":", 1)[1] if current.startswith("entity:") else None
-            if prev == entity_id:
-                return
-            if count >= 2:
-                new_state = "integration"
-                self._dispatch_notification(
-                    integration=integration,
-                    kind=notify_kind,
-                    scope=SCOPE_INTEGRATION,
-                    threshold_seconds=threshold_seconds,
-                )
-            else:
-                # Previous entity has recovered; a fresh one just crossed it.
-                new_state = f"entity:{entity_id}"
-                self._dispatch_notification(
-                    integration=integration,
-                    kind=notify_kind,
-                    scope=SCOPE_ENTITY,
-                    entity_id=entity_id,
-                    threshold_seconds=threshold_seconds,
-                )
+        state.n31_fired = True
+        most_eid = self._most_long_offline(qualified)
+        if not most_eid:
+            most_eid = entity_id
+        has_others = len(qualified) > 1
+        scope = SCOPE_INTEGRATION if has_others else SCOPE_ENTITY
+        self._dispatch_notification(
+            integration=integration,
+            kind=NOTIFY_N3_1,
+            scope=scope,
+            entity_id=most_eid,
+            entity_name=self._friendly_name(most_eid),
+            has_others=has_others,
+            threshold_seconds=threshold_seconds,
+        )
 
-        if level == "short":
-            state.short_state = new_state
-        else:
-            state.long_state = new_state
+    # -- Daily report tick -----------------------------------------------------
+
+    @callback
+    def _schedule_report_tick(self) -> None:
+        """Subscribe to the report-time clock event."""
+        if self._unsub_report_tick is not None:
+            self._unsub_report_tick()
+            self._unsub_report_tick = None
+        hour = self.report_time_hour
+        self._unsub_report_tick = async_track_time_change(
+            self.hass,
+            self._on_report_tick,
+            hour=hour,
+            minute=0,
+            second=0,
+        )
+
+    @callback
+    def _on_report_tick(self, _now: datetime) -> None:
+        """Fire daily reports and advance the state machine for every integration."""
+        now = dt_util.utcnow()
+        # Run for every integration that has any state, even if it has no
+        # current drops, because we still need to evaluate the quiet reset.
+        for integration in list(self._integration_state):
+            self._close_cycle(integration, now)
+        self._store.async_delay_save(self._data_for_storage, 5)
+        async_dispatcher_send(self.hass, SIGNAL_UPDATE)
+
+    @callback
+    def _close_cycle(self, integration: str, now: datetime) -> None:
+        """Emit the daily reports for an integration and roll the cycle."""
+        state = self._integration_state.get(integration)
+        if state is None:
+            return
+
+        # Materialise the just-ended cycle's data, treating still-open outages
+        # as closing right at this tick so their cycle contribution counts.
+        closed_intervals = [
+            (iv.entity_id, iv.start, iv.end if iv.end is not None else now)
+            for iv in state.cycle_intervals
+        ]
+        bursts = list(state.cycle_bursts)
+
+        self._maybe_fire_n2(integration, bursts)
+        self._maybe_fire_n3_2(integration, closed_intervals)
+
+        # Reset the cycle data, keeping any still-ongoing outages alive in a
+        # fresh interval that starts at the tick.
+        state.cycle_bursts = []
+        state.cycle_intervals = [
+            OutageInterval(entity_id=iv.entity_id, start=now, end=None)
+            for iv in state.cycle_intervals
+            if iv.end is None
+        ]
+
+        # State transitions
+        if state.state == STATE_ACTIVE_DAY1:
+            state.state = STATE_SILENT
+        elif state.state == STATE_SILENT:
+            reset_days = self.auto_reset_days
+            if (
+                reset_days > 0
+                and state.last_drop_at is not None
+                and (now - state.last_drop_at).days >= reset_days
+            ):
+                state.state = STATE_QUIET
+                state.first_drop_at_in_period = None
+                state.n11_fired = False
+                state.n12_fired = False
+
+    @callback
+    def _maybe_fire_n2(
+        self, integration: str, bursts: list[IntegrationBurst]
+    ) -> None:
+        """Fire the N2 daily report when the cycle saw at least one drop."""
+        if not bursts:
+            return
+        most_eid = self._most_frequent_entity(bursts)
+        unique = self._unique_entities(bursts)
+        scope = SCOPE_INTEGRATION if len(unique) > 1 else SCOPE_ENTITY
+        has_others = len(unique) > 1
+        self._dispatch_notification(
+            integration=integration,
+            kind=NOTIFY_N2,
+            scope=scope,
+            entity_id=most_eid,
+            entity_name=self._friendly_name(most_eid) if most_eid else "",
+            has_others=has_others,
+            outage_count=len(bursts),
+        )
+
+    @callback
+    def _maybe_fire_n3_2(
+        self,
+        integration: str,
+        intervals: list[tuple[str, datetime, datetime]],
+    ) -> None:
+        """Fire the N3.2 daily offline report when applicable."""
+        threshold_seconds = self.n3_minutes_threshold * 60
+        if threshold_seconds <= 0:
+            return
+
+        # Per-entity longest single outage and per-entity total downtime.
+        per_entity_longest: dict[str, float] = {}
+        per_entity_total: dict[str, float] = {}
+        for entity_id, start, end in intervals:
+            duration = (end - start).total_seconds()
+            if duration <= 0:
+                continue
+            if duration > per_entity_longest.get(entity_id, 0):
+                per_entity_longest[entity_id] = duration
+            per_entity_total[entity_id] = (
+                per_entity_total.get(entity_id, 0) + duration
+            )
+
+        # Inclusion rule: at least one entity must have had a single outage
+        # that lasted >= threshold during the cycle.
+        qualifying_entities = [
+            eid
+            for eid, longest in per_entity_longest.items()
+            if longest >= threshold_seconds
+        ]
+        if not qualifying_entities:
+            return
+
+        # Title/body duration is the union of the integration's offline time.
+        union_intervals = [(start, end) for _, start, end in intervals]
+        union_seconds = _union_seconds(union_intervals)
+
+        # Pick the entity that was offline the longest (cumulative) for the
+        # body. Ties resolved by entity_id for determinism.
+        most_eid = max(
+            per_entity_total.items(), key=lambda kv: (kv[1], kv[0])
+        )[0]
+        has_others = len(qualifying_entities) > 1
+        scope = SCOPE_INTEGRATION if has_others else SCOPE_ENTITY
+        self._dispatch_notification(
+            integration=integration,
+            kind=NOTIFY_N3_2,
+            scope=scope,
+            entity_id=most_eid,
+            entity_name=self._friendly_name(most_eid),
+            has_others=has_others,
+            duration_seconds=union_seconds,
+        )
 
     # -- Notification dispatch -------------------------------------------------
 
@@ -901,26 +1106,26 @@ class EntityMonitor:
         kind: str,
         scope: str,
         entity_id: str | None = None,
+        entity_name: str = "",
+        has_others: bool = False,
         outage_count: int = 0,
-        window_hours: int = 0,
+        window_minutes: int = 0,
         threshold_seconds: int = 0,
+        duration_seconds: float = 0.0,
     ) -> None:
         """Build, fire the event for, and deliver a notification."""
         integration_name = self._integration_name(integration)
-        entity_name = (
-            self._friendly_name(entity_id) if entity_id is not None else ""
-        )
-
         title, message = self._build_message(
             kind=kind,
             scope=scope,
             integration_name=integration_name,
             entity_name=entity_name,
+            has_others=has_others,
             outage_count=outage_count,
-            window_hours=window_hours,
+            window_minutes=window_minutes,
             threshold_seconds=threshold_seconds,
+            duration_seconds=duration_seconds,
         )
-
         self.hass.bus.async_fire(
             EVENT_NOTIFICATION,
             {
@@ -930,9 +1135,11 @@ class EntityMonitor:
                 "scope": scope,
                 "entity_id": entity_id,
                 "entity_name": entity_name,
+                "has_others": has_others,
                 "outage_count": outage_count,
-                "window_hours": window_hours,
+                "window_minutes": window_minutes,
                 "threshold_seconds": threshold_seconds,
+                "duration_seconds": round(duration_seconds, 1),
                 "title": title,
                 "message": message,
             },
@@ -949,73 +1156,53 @@ class EntityMonitor:
         scope: str,
         integration_name: str,
         entity_name: str,
+        has_others: bool,
         outage_count: int,
-        window_hours: int,
+        window_minutes: int,
         threshold_seconds: int,
+        duration_seconds: float,
     ) -> tuple[str, str]:
         """Return the (title, body) pair for a notification."""
-        if kind == NOTIFY_N1:
-            if scope == SCOPE_ENTITY:
-                return (
-                    integration_name,
-                    f"{entity_name} ficou indisponível.",
-                )
-            return (
-                f"Integração {integration_name} instável",
-                "Várias entidades caíram juntas.",
-            )
+        subject = (
+            f"{entity_name} e outras" if has_others else entity_name
+        )
+        verb_single = "caiu" if not has_others else "caíram"
 
-        if kind == NOTIFY_N1_UPGRADE:
+        if kind == NOTIFY_N1_1:
             return (
-                f"Integração {integration_name} instável",
-                "Outras entidades caíram, escalando para a integração.",
+                f"{integration_name} instável",
+                f"{subject} {verb_single}.",
             )
-
-        if kind in (NOTIFY_N2_SHORT, NOTIFY_N2_LONG):
-            if scope == SCOPE_ENTITY:
-                return (
-                    integration_name,
-                    f"{entity_name} indisponível {outage_count} vezes nas "
-                    f"últimas {window_hours}h.",
-                )
+        if kind == NOTIFY_N1_2:
             return (
-                f"Integração {integration_name} instável",
-                f"{outage_count} quedas nas últimas {window_hours}h.",
+                f"{integration_name} instável",
+                f"{subject} {verb_single} {outage_count} vezes nos últimos "
+                f"{window_minutes} minutos.",
             )
-
-        if kind == NOTIFY_N3_SHORT:
+        if kind == NOTIFY_N2:
+            return (
+                f"Relatório {integration_name}",
+                f"{subject} {verb_single} {outage_count} vezes ontem.",
+            )
+        if kind == NOTIFY_N3_1:
             minutes = threshold_seconds // 60
-            if scope == SCOPE_ENTITY:
-                return (
-                    integration_name,
-                    f"{entity_name} indisponível há mais de {minutes} "
-                    "minutos.",
-                )
+            offline_word = "offline"
             return (
-                f"Integração {integration_name}",
-                f"Indisponível há mais de {minutes} minutos.",
+                f"{integration_name} offline por mais de {minutes} minutos",
+                f"{subject} {offline_word} por {minutes} minutos.",
             )
-
-        if kind == NOTIFY_N3_LONG:
-            hours = threshold_seconds // 3600
-            if scope == SCOPE_ENTITY:
-                return (
-                    integration_name,
-                    f"{entity_name} indisponível há mais de {hours} horas.",
-                )
+        if kind == NOTIFY_N3_2:
+            duration = format_duration(duration_seconds)
+            verb_n32 = "ficaram" if has_others else "ficou"
             return (
-                f"Integração {integration_name}",
-                f"Indisponível há mais de {hours} horas.",
+                f"{integration_name} offline por {duration}",
+                f"{subject} {verb_n32} offline por {duration} ontem.",
             )
-
         return ("", "")
 
     @callback
     def async_send_test_notification(self) -> bool:
-        """Fire a sample notification so the user can validate the setup.
-
-        Returns whether the configured notify service was invoked.
-        """
+        """Fire a sample notification so the user can validate the setup."""
         title = "Entity Monitor — teste"
         message = (
             "Notificação de teste do Entity Monitor. Se você está vendo "
@@ -1030,9 +1217,11 @@ class EntityMonitor:
                 "scope": SCOPE_INTEGRATION,
                 "entity_id": None,
                 "entity_name": "",
+                "has_others": False,
                 "outage_count": 0,
-                "window_hours": 0,
+                "window_minutes": 0,
                 "threshold_seconds": 0,
+                "duration_seconds": 0,
                 "title": title,
                 "message": message,
                 "test": True,
@@ -1054,12 +1243,10 @@ class EntityMonitor:
         service = self.notify_service
         if not service:
             return
-
         if "." in service:
             domain, name = service.split(".", 1)
         else:
             domain, name = "notify", service
-
         self.hass.async_create_task(
             self.hass.services.async_call(
                 domain,
@@ -1073,20 +1260,34 @@ class EntityMonitor:
 
     @callback
     def async_reset_statistics(self) -> None:
-        """Clear all recorded statistics."""
+        """Clear cumulative statistics (kept buckets, restart counters)."""
         for eid in list(self.stats):
             self.stats[eid] = EntityStats()
         self.integration_stats.clear()
-        self._bursts.clear()
-        self._entity_burst.clear()
-        for integration in list(self._cycle):
-            self._end_cycle(integration)
-        self._n3_state.clear()
         self._last_reset_at = dt_util.utcnow()
         self._store.async_delay_save(self._data_for_storage, 1)
         async_dispatcher_send(self.hass, SIGNAL_UPDATE)
         _LOGGER.info("Entity Monitor statistics reset")
-        # Restart the auto-reset countdown from this moment.
+        self._schedule_auto_reset()
+
+    @callback
+    def async_reset_all(self) -> None:
+        """Zero everything: stats, integration state, ongoing outages."""
+        self.stats.clear()
+        self.integration_stats.clear()
+        self._integration_state.clear()
+        for outage in self._ongoing.values():
+            for cancel in outage.timers:
+                cancel()
+        self._ongoing.clear()
+        self._stored_outage_starts.clear()
+        self._last_reset_at = dt_util.utcnow()
+        self._store.async_delay_save(self._data_for_storage, 1)
+        async_dispatcher_send(self.hass, SIGNAL_UPDATE)
+        _LOGGER.info("Entity Monitor full reset performed")
+        # Re-seed stats for the currently watched entities.
+        for eid in self._resolved_entities():
+            self.stats.setdefault(eid, EntityStats())
         self._schedule_auto_reset()
 
     @callback
@@ -1103,14 +1304,11 @@ class EntityMonitor:
         period = timedelta(days=days)
         now = dt_util.utcnow()
         if self._last_reset_at is None:
-            # First time we see this period: anchor it to now so users get a
-            # full window before the first auto-reset.
             self._last_reset_at = now
             self._store.async_delay_save(self._data_for_storage, 1)
 
         next_at = self._last_reset_at + period
         if next_at <= now:
-            # The window already elapsed (e.g. HA was off): reset right away.
             self.async_reset_statistics()
             return
 
@@ -1160,7 +1358,6 @@ class EntityMonitor:
             key=lambda e: (e["outage_count"], e["total_downtime_seconds"]),
             reverse=True,
         )
-
         by_integration = self._build_integration_report()
 
         return {
@@ -1173,12 +1370,9 @@ class EntityMonitor:
                 e["entity_id"] for e in by_entity if e["currently_unavailable"]
             ],
             "seconds_threshold": self.seconds_threshold,
-            "sustained_outage_short_minutes": (
-                self.sustained_outage_short_minutes
-            ),
-            "sustained_outage_long_hours": self.sustained_outage_long_hours,
-            "notify_cooldown_hours": self.notify_cooldown_hours,
-            "notify_short_summary_hours": self.notify_short_summary_hours,
+            "n1_burst_window_minutes": self.n1_burst_window_minutes,
+            "n3_minutes_threshold": self.n3_minutes_threshold,
+            "report_time_hour": self.report_time_hour,
             "coalesce_seconds": self.coalesce_seconds,
             "auto_reset_days": self.auto_reset_days,
             "last_reset_at": (
@@ -1231,6 +1425,55 @@ class EntityMonitor:
 
     # -- Internal helpers ------------------------------------------------------
 
+    @staticmethod
+    def _most_frequent_entity(bursts: list[IntegrationBurst]) -> str:
+        """Return the entity that appeared in the most bursts."""
+        counter: Counter[str] = Counter()
+        for burst in bursts:
+            for entity_id in burst.entities:
+                counter[entity_id] += 1
+        if not counter:
+            return ""
+        most_common = counter.most_common()
+        # Resolve ties by entity_id for determinism.
+        top_count = most_common[0][1]
+        ties = sorted([eid for eid, c in most_common if c == top_count])
+        return ties[0]
+
+    @staticmethod
+    def _unique_entities(bursts: list[IntegrationBurst]) -> set[str]:
+        """Return the set of unique entity ids across bursts."""
+        result: set[str] = set()
+        for burst in bursts:
+            result.update(burst.entities)
+        return result
+
+    def _most_long_offline(self, entity_ids: list[str]) -> str:
+        """Return the entity from the list that's been offline the longest."""
+        now = dt_util.utcnow()
+        best_eid = ""
+        best_seconds = -1.0
+        for eid in sorted(entity_ids):
+            outage = self._ongoing.get(eid)
+            if outage is None:
+                continue
+            elapsed = (now - outage.started).total_seconds()
+            if elapsed > best_seconds:
+                best_seconds = elapsed
+                best_eid = eid
+        return best_eid
+
+    def _scope_for_entities(
+        self, entity_ids: list[str]
+    ) -> tuple[str, str | None, str, bool]:
+        """Pick the citation entity and decide the notification scope."""
+        if not entity_ids:
+            return (SCOPE_INTEGRATION, None, "", False)
+        primary = entity_ids[0]
+        has_others = len(entity_ids) > 1
+        scope = SCOPE_INTEGRATION if has_others else SCOPE_ENTITY
+        return (scope, primary, self._friendly_name(primary), has_others)
+
     @callback
     def _data_for_storage(self) -> dict:
         """Return the data structure persisted to disk."""
@@ -1245,10 +1488,20 @@ class EntityMonitor:
                 if self._last_reset_at is not None
                 else None
             ),
+            "integration_state": {
+                integration: state.as_dict()
+                for integration, state in self._integration_state.items()
+            },
+            "ongoing_outages": {
+                eid: outage.started.isoformat()
+                for eid, outage in self._ongoing.items()
+            },
         }
 
     def _friendly_name(self, entity_id: str) -> str:
         """Return the friendly name of an entity, falling back to its id."""
+        if not entity_id:
+            return ""
         state = self.hass.states.get(entity_id)
         if state is not None:
             return state.attributes.get("friendly_name", entity_id)

@@ -1,18 +1,20 @@
 # Entity-Monitor
 
 Integração customizada para o **Home Assistant** que monitora o status das suas
-entidades, avisa quando elas ficam **indisponíveis** (`unavailable`) e gera um
-relatório com as entidades e integrações que mais caem.
+entidades, avisa quando elas ficam **indisponíveis** (`unavailable`) e dispara
+um conjunto enxuto de notificações + relatório diário no horário escolhido.
 
 ## O que ela faz
 
 - Acompanha uma lista de entidades escolhida por você.
-- Dispara um conjunto de notificações com 3 níveis de severidade (N1/N2/N3) —
-  ver detalhes em [Notificações automáticas](#notificações-automáticas).
-- Guarda o histórico de quedas (mesmo após reiniciar o Home Assistant):
-  quantas vezes cada entidade caiu e por quanto tempo.
+- Dispara notificações em 3 níveis (N1, N2, N3) — ver
+  [Notificações](#notificações).
+- Permite **excluir** entidades específicas mesmo dentro de uma integração
+  monitorada.
+- Guarda o histórico de quedas (sobrevive a reinícios do HA): quantas vezes
+  cada entidade caiu, por quanto tempo, e o estado por integração.
 - Gera um **relatório** ranqueando as entidades e integrações que mais ficam
-  offline, com a contagem de quedas e o tempo total indisponível.
+  offline.
 
 ## Instalação
 
@@ -29,235 +31,196 @@ relatório com as entidades e integrações que mais caem.
 1. Vá em **Configurações → Dispositivos e Serviços → Adicionar Integração**.
 2. Procure por **Entity Monitor**.
 3. No formulário, informe:
-   - **Integrações a monitorar** — escolha uma ou mais integrações (ex:
-     `tuya`, `mqtt`, `zigbee2mqtt`) e **todas** as entidades delas entram no
-     monitoramento automaticamente. Ideal para acompanhar hubs inteiros sem
-     listar entidade por entidade.
+   - **Integrações a monitorar** — todas as entidades destas integrações
+     entram no monitoramento.
    - **Só a entidade principal de cada dispositivo** *(padrão ligado)* —
-     quando você escolhe uma integração, mantém apenas **uma** entidade por
-     device (a "principal", normalmente a que tem o mesmo nome do dispositivo),
-     descartando sensores de diagnóstico, RSSI, bateria, etc. Desligue se
-     quiser monitorar cada entidade individualmente.
-   - **Entidades extras** *(opcional)* — entidades avulsas que você quer
-     monitorar mesmo que a integração delas não esteja selecionada.
-   - **Confirmar queda após (segundos)** — quanto tempo a entidade precisa
-     ficar `unavailable` para o sistema considerar uma queda confirmada.
-     Padrão: `30`.
-   - **Janela de quedas simultâneas (segundos)** — se várias entidades da
-     mesma integração caírem dentro dessa janela, contam como **1 evento**
-     (provavelmente o hub caiu). Padrão: `20`.
-   - **Serviço de notificação** *(opcional)* — o serviço `notify.*` que vai
-     receber os avisos (ex: `notify.mobile_app_meu_celular`). Deixe em branco
-     para não enviar notificação automática (o evento ainda é disparado).
-   - **Cooldown do N1 / janela do resumo longo N2** *(horas)* — quanto tempo
-     o sistema fica em silêncio depois do N1, e janela coberta pelo resumo
-     N2-long. Padrão: `12`.
-   - **Resumo curto N2** *(horas, 0 desliga)* — após quantas horas dentro do
-     cooldown disparar o resumo curto (se houve mais quedas). Padrão: `2`.
-   - **Limite curto N3** *(minutos, 0 desliga)* — uma entidade indisponível
-     por esse tempo dispara o N3-short. Padrão: `30`.
-   - **Limite longo N3** *(horas, 0 desliga)* — uma entidade indisponível
-     por esse tempo dispara o N3-long. Padrão: `12`.
-4. Pronto. Você pode mudar tudo a qualquer momento clicando em **Configurar**
-   na integração (em *Configurações → Dispositivos e Serviços*).
+     descarta sensores de diagnóstico, RSSI, bateria, etc.
+   - **Entidades extras** *(opcional)* — entidades avulsas mesmo que a
+     integração delas não esteja selecionada.
+   - **Entidades a ignorar** *(opcional)* — entidades a excluir do
+     monitoramento, mesmo que façam parte de uma integração monitorada. Some
+     completamente (sem stats, sem notificação, sem aparecer no relatório).
+   - **Confirmar queda após (segundos)** — padrão `30`.
+   - **Janela de quedas simultâneas (segundos)** — padrão `20`.
+   - **Serviço de notificação** *(opcional)* — `notify.*` que recebe os
+     avisos.
+   - **Janela do N1.2 (minutos)** — janela em que a 2ª queda dispara o N1.2.
+     Padrão `30`.
+   - **Limiar de offline N3 (minutos)** — uma entidade nesse tempo contínuo
+     offline dispara o N3.1. Também é o limiar pra inclusão no relatório
+     diário N3.2. Padrão `30`.
+   - **Hora do relatório diário (0-23)** — quando os relatórios N2/N3.2
+     disparam. Padrão `7` (07:00 local).
+   - **Reset automático (dias)** — zera estatísticas E reseta o estado
+     `silent → quiet` quando passam N dias sem qualquer queda na integração.
+     Padrão `30`. `0` desliga ambos.
 
 ## O que é criado
-
-Um dispositivo **Entity Monitor** com as seguintes entidades:
 
 | Entidade | Descrição |
 | --- | --- |
 | `binary_sensor.entity_monitor_problem` | Liga (`on`) enquanto qualquer entidade monitorada estiver indisponível. |
 | `sensor.entity_monitor_total_outages` | Número total de quedas registradas. |
 | `sensor.entity_monitor_total_downtime` | Tempo total offline (em minutos). |
-| `sensor.entity_monitor_downtime_report` | O relatório completo nos atributos: `worst_entities` e `worst_integrations`. |
-| `button.entity_monitor_test_notification` | Aperte para disparar uma notificação de teste pelo serviço configurado. |
+| `sensor.entity_monitor_downtime_report` | Relatório completo nos atributos. |
+| `button.entity_monitor_test_notification` | Dispara uma notificação de teste. |
+| `button.entity_monitor_reset_all` | Zera tudo: estatísticas, estado e registros de outage em curso. |
 
-## Quedas simultâneas (coalescência)
+## Notificações
 
-Quando um hub cai, dezenas de entidades da mesma integração ficam
-indisponíveis quase ao mesmo tempo. Isso **não** deve contar como dezenas de
-quedas — é **um único evento**.
+### Estados por integração
 
-Por isso, quedas de entidades da mesma integração que acontecem dentro da
-**janela de quedas simultâneas** (padrão 20s) são agrupadas em um só evento
-de queda (*burst*). Esse evento único é o que conta tanto na notificação
-quanto no ranking de integrações do relatório.
+Cada integração caminha por 3 estados:
 
-O tempo offline de **cada entidade** continua sendo registrado
-individualmente (você ainda vê quanto cada uma ficou fora no ranking por
-entidade).
+| Estado | Como entra | Como sai |
+| --- | --- | --- |
+| `quiet` | Inicial, ou após 30 dias sem nenhuma queda | 1ª queda → N1.1, vira `active_day1` |
+| `active_day1` | N1.1 acabou de disparar | No próximo `report_time` (07:00 default) → `silent` |
+| `silent` | Já passou o `report_time` desde N1.1 | 30 dias seguidos sem queda → `quiet` |
 
-## Notificações automáticas
+### N1.1 — Primeira queda
 
-Se você preencher o **Serviço de notificação**, o Entity Monitor envia avisos
-sozinho — sem precisar criar automação. A lógica em três níveis:
+Dispara quando a integração estava em `quiet` e acontece uma queda.
 
-### N1 — Queda pontual (imediata)
+- **Título**: `[Integração] instável`
+- **1 entidade**: `Entidade A caiu.`
+- **≥2 entidades** (mesmo burst): `Entidade A e outras caíram.`
 
-Dispara quando uma integração cai e não está em cooldown. O conteúdo varia
-conforme **quantas entidades** caíram juntas no mesmo *burst*:
+### N1.2 — Padrão de instabilidade
 
-- **1 entidade** → título: `<Nome da integração>`, corpo:
-  `<Nome amigável> ficou indisponível.`
-- **2+ entidades** → título: `Integração <X> instável`, corpo:
-  `Várias entidades caíram juntas.`
+Dispara quando, durante `active_day1`, acontece uma 2ª queda **dentro da
+janela do N1.2** (padrão 30 min) a partir da 1ª. **Uma única vez** por
+período ativo.
 
-Depois disso, abre um **cooldown** de `notify_cooldown_hours` horas (padrão
-12h) em que o N1 não dispara de novo. Durante esse cooldown:
+- **Título**: `[Integração] instável`
+- A entidade citada é a que **mais caiu** nas bursts do dia.
+- **1 entidade afetada no total**: `Entidade A caiu X vezes nos últimos
+  Y minutos.`
+- **≥2 entidades**: `Entidade A e outras caíram X vezes nos últimos Y
+  minutos.`
+- X = nº de bursts até o disparo. Y = janela configurada.
 
-- Se uma **segunda entidade diferente** cai (escalada para "integração
-  instável"), uma notificação de upgrade é disparada — única vez por ciclo.
-  O cooldown segue contando normalmente.
-- Todas as quedas continuam sendo acumuladas para os resumos N2.
+### N2 — Relatório de quedas (diário)
 
-### N2 — Resumos (automáticos)
+Dispara no `report_time` (07:00 default) para cada integração que teve
+**≥1 queda** no ciclo anterior (ciclo = das 07:00 de ontem às 06:59 de
+hoje).
 
-Dentro do cooldown disparado pelo N1, dois resumos podem ser enviados:
+- **Título**: `Relatório [Integração]`
+- **1 entidade afetada no total**: `Entidade A caiu X vezes ontem.`
+- **≥2 entidades**: `Entidade A e outras caíram X vezes ontem.`
+- A entidade citada é a que mais caiu no ciclo. X = total de bursts.
 
-- **N2-short** após `notify_short_summary_hours` horas (padrão 2h)
-- **N2-long** ao expirar o cooldown (padrão 12h), encerrando o ciclo
+### N3.1 — Offline prolongado (em tempo real)
 
-Cada resumo só dispara se **houve mais de uma queda** no ciclo (caso
-contrário, fica em silêncio):
+Dispara quando uma entidade fica offline **continuamente** por mais que o
+**Limiar de offline N3** (padrão 30 min). **Independente** do estado N1.
+Uma única vez por outage da integração — só rearma quando todas as
+entidades dela voltarem ao normal.
 
-- Se todas as quedas foram da mesma única entidade (sem upgrade):
-  `<Nome> indisponível X vezes nas últimas Yh.`
-- Se foi um cenário de integração instável:
-  `X quedas nas últimas Yh.` (título `Integração <X> instável`)
+- **Título**: `[Integração] offline por mais de 30 minutos`
+- A entidade citada é a que está offline há mais tempo.
+- **1 entidade afetada**: `Entidade A offline por 30 minutos.`
+- **≥2 entidades**: `Entidade A e outras offline por 30 minutos.`
 
-Coloque `notify_short_summary_hours = 0` para desligar o resumo curto.
+### N3.2 — Relatório de offline (diário)
 
-### N3 — Indisponibilidade prolongada (independente)
+Dispara no `report_time` para cada integração em que **pelo menos uma
+entidade teve um único outage ≥ limiar N3** no ciclo anterior.
 
-Notificações disparadas quando uma entidade fica offline por muito tempo,
-**independentes** do ciclo N1/N2. Dois limiares:
+- **Título**: `[Integração] offline por {duração}`
+- A entidade citada é a que mais acumulou offline.
+- **1 entidade afetada**: `Entidade A ficou offline por {duração} ontem.`
+- **≥2 entidades**: `Entidade A e outras ficaram offline por {duração}
+  ontem.`
+- `{duração}` é a **união** do tempo em que **pelo menos 1 entidade** da
+  integração esteve offline (overlaps contam uma vez). Auto-formatado em
+  `Xh Ym` ou `Xm`.
 
-- **N3-short** — `sustained_outage_short_minutes` minutos (padrão 30min)
-- **N3-long** — `sustained_outage_long_hours` horas (padrão 12h)
+### Citação de entidade
 
-Cada um dispara uma vez por outage da integração:
-
-- Se só **uma entidade** estiver indisponível ≥ limiar:
-  `<Nome> indisponível há mais de N minutos/horas.`
-- Se **duas ou mais** entidades da mesma integração estiverem
-  indisponíveis ≥ limiar:
-  `Integração <X> indisponível há mais de N minutos/horas.` (promoção)
-
-O estado N3 é resetado quando **todas** as entidades da integração voltam
-ao normal. Coloque o valor em `0` para desligar.
+Em todas as notificações **apenas uma entidade é citada** pelo nome. Se
+houver outras envolvidas, vem `"e outras"` — sem listar quem. Isso é
+intencional pra não inchar a notificação.
 
 ### Evento `entity_monitor_notification`
 
-Cada notificação dispara também o evento `entity_monitor_notification` no
-bus do Home Assistant, com os campos:
+Cada notificação dispara o evento `entity_monitor_notification`:
 
 | Campo | Descrição |
 | --- | --- |
-| `integration` | Slug da integração (ex: `localtuya`). |
+| `integration` | Slug (ex: `localtuya`). |
 | `integration_name` | Nome amigável (ex: `Local Tuya`). |
-| `kind` | `n1` / `n1_upgrade` / `n2_short` / `n2_long` / `n3_short` / `n3_long` / `test`. |
-| `scope` | `entity` ou `integration`. |
-| `entity_id` | ID da entidade quando `scope=entity`. |
-| `entity_name` | Nome amigável da entidade. |
-| `outage_count` | Para N2: número de quedas no período. |
-| `window_hours` | Para N2: janela coberta. |
-| `threshold_seconds` | Para N3: limite que disparou. |
-| `title`, `message` | Conteúdo final da notificação. |
+| `kind` | `n1_1` / `n1_2` / `n2` / `n3_1` / `n3_2` / `test`. |
+| `scope` | `entity` (1 entidade) ou `integration` (≥2). |
+| `entity_id`, `entity_name` | Entidade citada no corpo. |
+| `has_others` | `true` se houve "e outras". |
+| `outage_count` | X em N1.2/N2. |
+| `window_minutes` | Y em N1.2. |
+| `threshold_seconds` | Limiar do N3.1. |
+| `duration_seconds` | Duração-união do N3.2. |
+| `title`, `message` | Conteúdo final. |
 
-### Testar a notificação
+## Persistência
 
-Para conferir se o serviço está configurado certo:
+Tudo é salvo em disco:
 
-- **Botão** — abra o device *Entity Monitor* e clique em **Testar notificação**
-  (`button.entity_monitor_test_notification`).
-- **Serviço** — chame `entity_monitor.test_notification` em
-  *Ferramentas para Desenvolvedores → Serviços*.
+- Estatísticas cumulativas (entidades e integrações).
+- Estado N1/N3 por integração.
+- Buffer do ciclo atual (bursts + intervalos de offline).
+- `started_at` dos outages em curso — restart **nunca conta a partir do
+  boot**, retoma do momento real da queda.
 
-Em ambos os casos, uma notificação de exemplo cai no celular (se houver
-serviço configurado) e o evento `entity_monitor_notification` é disparado
-com `kind: test` e `test: true`, para você poder filtrar em automações.
+## Reset
+
+Dois caminhos:
+
+- **`Reset estatísticas`** — só zera contadores cumulativos. Estado N1/N3
+  preservado.
+- **`Reset tudo`** — zera estatísticas, estado, ciclo atual e timers de
+  outages em curso. Botão `button.entity_monitor_reset_all` ou serviço
+  `entity_monitor.reset_all`.
+
+Reset automático: a cada `auto_reset_days` (padrão 30) tanto os contadores
+cumulativos zeram quanto o estado `silent → quiet` reseta. `0` desliga.
+
+## Testar a notificação
+
+- **Botão** `button.entity_monitor_test_notification`.
+- **Serviço** `entity_monitor.test_notification`.
+
+Em ambos o evento `entity_monitor_notification` é disparado com
+`kind: "test"` e `test: true`.
 
 ## Eventos disparados
 
-Use estes eventos em automações para integrar com Telegram, push, etc.:
+- `entity_monitor_unavailable` — em cada cruzamento de limiar
+  (`level=seconds` no `seconds_threshold`, `level=minutes` no
+  `n3_minutes_threshold`).
+- `entity_monitor_recovered` — quando a entidade volta ao normal.
+- `entity_monitor_notification` — em cada notificação (ver tabela).
+- `entity_monitor_report` — quando o serviço de relatório roda.
 
-- `entity_monitor_unavailable` — disparado nos limites de
-  `seconds_threshold`, `sustained_outage_short_minutes` e
-  `sustained_outage_long_hours`. Campos: `entity_id`, `friendly_name`,
-  `integration`, `level` (`seconds`, `minutes` ou `hours`),
-  `threshold_seconds`, `unavailable_since`, `duration_seconds`.
-- `entity_monitor_recovered` — disparado quando a entidade volta ao normal.
-  Campos: `entity_id`, `integration`, `duration_seconds`, `duration`,
-  `outage_count`.
-- `entity_monitor_notification` — disparado em cada notificação enviada
-  (ver tabela acima).
-- `entity_monitor_report` — disparado quando o serviço de relatório roda.
+## Relatório (sob demanda)
 
-### Exemplo de automação (alerta de queda)
+**Pelo sensor** — `sensor.entity_monitor_downtime_report` traz nos
+atributos `worst_entities` e `worst_integrations`.
 
-```yaml
-automation:
-  - alias: Avisar quando uma entidade cair
-    trigger:
-      - platform: event
-        event_type: entity_monitor_unavailable
-    action:
-      - service: notify.notify
-        data:
-          title: >-
-            {% if trigger.event.data.level == 'hours' %}
-            Entidade offline há muitas horas
-            {% elif trigger.event.data.level == 'minutes' %}
-            Entidade offline há vários minutos
-            {% else %}
-            Entidade offline
-            {% endif %}
-          message: >-
-            {{ trigger.event.data.friendly_name }}
-            ({{ trigger.event.data.integration }}) está indisponível há
-            {{ trigger.event.data.duration_seconds }}s.
-```
+**Pelo serviço** — `entity_monitor.generate_report` (com *return response*
+para receber inline). Retorna ranking por entidade e por integração.
 
-## Relatório
+## Configurações
 
-Há duas formas de obter o relatório de quem mais fica offline:
-
-**1. Pelo sensor** — abra `sensor.entity_monitor_downtime_report` e veja os
-atributos `worst_entities` (ranking por entidade) e `worst_integrations`
-(ranking por integração).
-
-**2. Pelo serviço** — chame `entity_monitor.generate_report`. Em
-**Ferramentas para Desenvolvedores → Serviços**, marque *retornar resposta*
-para ver o relatório na hora. Ele traz, ordenado da pior para a melhor:
-
-- `by_entity` — cada entidade com `outage_count` (nº de quedas da entidade),
-  `total_downtime` (tempo total offline) e `longest_outage` (maior queda).
-- `by_integration` — por integração, com `outage_count` contando **eventos
-  de queda** (quedas simultâneas já agrupadas) e `total_downtime` do período
-  em que a integração esteve fora.
-
-Para zerar o histórico:
-
-- **Manualmente** — chame o serviço `entity_monitor.reset_statistics` ou
-  rode a partir de uma automação.
-- **Automaticamente** — a cada `auto_reset_days` dias (padrão 30) o
-  Entity Monitor zera os contadores sozinho, dando uma janela móvel.
-  Coloque `0` para desligar. O relatório inclui `last_reset_at` mostrando
-  quando foi o último reset.
-
-## Configuração
-
-| Campo | Significado | Padrão |
+| Chave | Default | Descrição |
 | --- | --- | --- |
-| `integrations` | Integrações cujas entidades são monitoradas inteiras | — |
-| `only_primary_entity` | Manter só a entidade principal de cada device | `true` |
-| `entities` | Entidades avulsas extras | — |
-| `seconds_threshold` | Segundos para confirmar a queda | `30` |
-| `coalesce_seconds` | Janela em que quedas simultâneas viram 1 evento | `20` |
-| `notify_service` | Serviço `notify.*` para os avisos automáticos (opcional) | — |
-| `notify_cooldown_hours` | Cooldown do N1 e janela do resumo longo N2 (horas) | `12` |
-| `notify_short_summary_hours` | Janela do resumo curto N2 (horas, 0 desliga) | `2` |
-| `sustained_outage_short_minutes` | Limite curto do N3 (minutos, 0 desliga) | `30` |
-| `sustained_outage_long_hours` | Limite longo do N3 (horas, 0 desliga) | `12` |
-| `auto_reset_days` | Zera as estatísticas a cada N dias (`0` desliga) | `30` |
+| `integrations` | — | Integrações monitoradas |
+| `only_primary_entity` | `true` | Só a entidade principal de cada device |
+| `entities` | — | Entidades avulsas extras |
+| `excluded_entities` | — | Entidades a ignorar por completo |
+| `seconds_threshold` | `30` | Segundos pra confirmar uma queda |
+| `coalesce_seconds` | `20` | Janela de quedas simultâneas |
+| `n1_burst_window_minutes` | `30` | Y do N1.2 (0 desliga N1.2) |
+| `n3_minutes_threshold` | `30` | Limiar N3.1 e inclusão N3.2 (0 desliga N3) |
+| `report_time_hour` | `7` | Hora local dos relatórios diários (0-23) |
+| `notify_service` | — | Serviço `notify.*` |
+| `auto_reset_days` | `30` | Reset auto de stats e estado (`0` desliga) |

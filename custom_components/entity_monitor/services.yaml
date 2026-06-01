@@ -8,8 +8,15 @@ generate_report:
 reset_statistics:
   name: Reset statistics
   description: >-
-    Clear all stored outage counters and downtime totals. Entities that are
+    Clear cumulative outage counters and downtime totals. Entities that are
     currently unavailable keep their ongoing outage.
+
+reset_all:
+  name: Reset all data
+  description: >-
+    Zero everything: cumulative statistics, per-integration N1/N2/N3 state and
+    every record of the current daily cycle. Ongoing outage timers are
+    canceled. Use this for a hard reset.
 
 test_notification:
   name: Send test notification

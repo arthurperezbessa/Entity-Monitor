@@ -9,23 +9,22 @@ PLATFORMS = ["binary_sensor", "button", "sensor"]
 CONF_ENTITIES = "entities"
 CONF_INTEGRATIONS = "integrations"
 CONF_ONLY_PRIMARY = "only_primary_entity"
+CONF_EXCLUDED_ENTITIES = "excluded_entities"
 CONF_SECONDS_THRESHOLD = "seconds_threshold"
-CONF_SUSTAINED_OUTAGE_SHORT_MINUTES = "sustained_outage_short_minutes"
-CONF_SUSTAINED_OUTAGE_LONG_HOURS = "sustained_outage_long_hours"
-CONF_NOTIFY_SERVICE = "notify_service"
-CONF_NOTIFY_COOLDOWN_HOURS = "notify_cooldown_hours"
-CONF_NOTIFY_SHORT_SUMMARY_HOURS = "notify_short_summary_hours"
 CONF_COALESCE_SECONDS = "coalesce_seconds"
+CONF_N1_BURST_WINDOW_MINUTES = "n1_burst_window_minutes"
+CONF_N3_MINUTES_THRESHOLD = "n3_minutes_threshold"
+CONF_REPORT_TIME_HOUR = "report_time_hour"
+CONF_NOTIFY_SERVICE = "notify_service"
 CONF_AUTO_RESET_DAYS = "auto_reset_days"
 
 # Defaults
 DEFAULT_NAME = "Entity Monitor"
 DEFAULT_SECONDS_THRESHOLD = 30
-DEFAULT_SUSTAINED_OUTAGE_SHORT_MINUTES = 30
-DEFAULT_SUSTAINED_OUTAGE_LONG_HOURS = 12
-DEFAULT_NOTIFY_COOLDOWN_HOURS = 12
-DEFAULT_NOTIFY_SHORT_SUMMARY_HOURS = 2
 DEFAULT_COALESCE_SECONDS = 20
+DEFAULT_N1_BURST_WINDOW_MINUTES = 30
+DEFAULT_N3_MINUTES_THRESHOLD = 30
+DEFAULT_REPORT_TIME_HOUR = 7
 DEFAULT_ONLY_PRIMARY = True
 DEFAULT_AUTO_RESET_DAYS = 30
 
@@ -60,20 +59,23 @@ EVENT_NOTIFICATION = "entity_monitor_notification"
 # Alert levels (per-entity unavailable events)
 LEVEL_SECONDS = "seconds"
 LEVEL_MINUTES = "minutes"
-LEVEL_HOURS = "hours"
 
 # Notification kinds (for entity_monitor_notification events)
-NOTIFY_N1 = "n1"
-NOTIFY_N1_UPGRADE = "n1_upgrade"
-NOTIFY_N2_SHORT = "n2_short"
-NOTIFY_N2_LONG = "n2_long"
-NOTIFY_N3_SHORT = "n3_short"
-NOTIFY_N3_LONG = "n3_long"
+NOTIFY_N1_1 = "n1_1"
+NOTIFY_N1_2 = "n1_2"
+NOTIFY_N2 = "n2"
+NOTIFY_N3_1 = "n3_1"
+NOTIFY_N3_2 = "n3_2"
 NOTIFY_TEST = "test"
 
-# Notification scope
-SCOPE_ENTITY = "entity"
-SCOPE_INTEGRATION = "integration"
+# Notification scope (number of entities involved)
+SCOPE_ENTITY = "entity"  # exactly one
+SCOPE_INTEGRATION = "integration"  # two or more
+
+# Per-integration cycle states
+STATE_QUIET = "quiet"
+STATE_ACTIVE_DAY1 = "active_day1"
+STATE_SILENT = "silent"
 
 # Dispatcher signal used to refresh sensors
 SIGNAL_UPDATE = "entity_monitor_update"
@@ -81,7 +83,8 @@ SIGNAL_UPDATE = "entity_monitor_update"
 # Services
 SERVICE_GENERATE_REPORT = "generate_report"
 SERVICE_RESET_STATISTICS = "reset_statistics"
+SERVICE_RESET_ALL = "reset_all"
 SERVICE_TEST_NOTIFICATION = "test_notification"
 
 # Storage
-STORAGE_VERSION = 1
+STORAGE_VERSION = 2

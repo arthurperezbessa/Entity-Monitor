@@ -3,25 +3,24 @@
     "step": {
       "user": {
         "title": "Entity Monitor",
-        "description": "Pick whole integrations and/or individual entities to watch, then tune the notification thresholds.",
+        "description": "Pick the integrations and/or entities to watch. Excluded entities are ignored entirely.",
         "data": {
           "integrations": "Integrations to monitor (every entity of these)",
           "only_primary_entity": "Watch only the main entity of each device",
           "entities": "Extra entities to monitor (individual)",
+          "excluded_entities": "Entities to ignore",
           "seconds_threshold": "Confirm an outage after (seconds)",
           "coalesce_seconds": "Window to treat simultaneous drops as one (seconds)",
           "notify_service": "Notify service (e.g. notify.mobile_app_xxx) - optional",
-          "notify_cooldown_hours": "N1 cooldown / N2 long summary (hours)",
-          "notify_short_summary_hours": "N2 short summary delay (hours, 0 disables)",
-          "sustained_outage_short_minutes": "N3 short threshold (minutes, 0 disables)",
-          "sustained_outage_long_hours": "N3 long threshold (hours, 0 disables)",
-          "auto_reset_days": "Auto-reset statistics every N days (0 = never)"
+          "n1_burst_window_minutes": "N1.2 escalation window (minutes, 0 disables)",
+          "n3_minutes_threshold": "N3 offline threshold (minutes, 0 disables)",
+          "report_time_hour": "Daily report hour (0-23, local time)",
+          "auto_reset_days": "Auto-reset statistics and silent state every N days (0 = never)"
         }
       }
     },
     "error": {
-      "nothing_selected": "Pick at least one integration or one entity.",
-      "short_summary_too_long": "Short summary delay must be smaller than the cooldown."
+      "nothing_selected": "Pick at least one integration or one entity."
     },
     "abort": {
       "single_instance_allowed": "Entity Monitor is already configured."
@@ -36,20 +35,19 @@
           "integrations": "Integrations to monitor (every entity of these)",
           "only_primary_entity": "Watch only the main entity of each device",
           "entities": "Extra entities to monitor (individual)",
+          "excluded_entities": "Entities to ignore",
           "seconds_threshold": "Confirm an outage after (seconds)",
           "coalesce_seconds": "Window to treat simultaneous drops as one (seconds)",
           "notify_service": "Notify service (e.g. notify.mobile_app_xxx) - optional",
-          "notify_cooldown_hours": "N1 cooldown / N2 long summary (hours)",
-          "notify_short_summary_hours": "N2 short summary delay (hours, 0 disables)",
-          "sustained_outage_short_minutes": "N3 short threshold (minutes, 0 disables)",
-          "sustained_outage_long_hours": "N3 long threshold (hours, 0 disables)",
-          "auto_reset_days": "Auto-reset statistics every N days (0 = never)"
+          "n1_burst_window_minutes": "N1.2 escalation window (minutes, 0 disables)",
+          "n3_minutes_threshold": "N3 offline threshold (minutes, 0 disables)",
+          "report_time_hour": "Daily report hour (0-23, local time)",
+          "auto_reset_days": "Auto-reset statistics and silent state every N days (0 = never)"
         }
       }
     },
     "error": {
-      "nothing_selected": "Pick at least one integration or one entity.",
-      "short_summary_too_long": "Short summary delay must be smaller than the cooldown."
+      "nothing_selected": "Pick at least one integration or one entity."
     }
   },
   "services": {
@@ -59,7 +57,11 @@
     },
     "reset_statistics": {
       "name": "Reset statistics",
-      "description": "Clear all stored outage counters and downtime totals."
+      "description": "Clear cumulative outage counters and downtime totals."
+    },
+    "reset_all": {
+      "name": "Reset all data",
+      "description": "Zero stats, integration state and ongoing-outage records."
     },
     "test_notification": {
       "name": "Send test notification",
@@ -70,6 +72,9 @@
     "button": {
       "test_notification": {
         "name": "Test notification"
+      },
+      "reset_all": {
+        "name": "Reset all data"
       }
     }
   }
