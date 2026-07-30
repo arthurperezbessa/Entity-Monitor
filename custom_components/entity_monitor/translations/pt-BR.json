@@ -12,10 +12,9 @@
           "seconds_threshold": "Confirmar queda após (segundos)",
           "coalesce_seconds": "Janela para tratar quedas simultâneas como uma (segundos)",
           "notify_service": "Serviço de notificação (ex: notify.mobile_app_xxx) - opcional",
-          "n1_burst_window_minutes": "Janela do N1.2 (minutos, 0 desliga)",
-          "n3_minutes_threshold": "Limiar de offline N3 (minutos, 0 desliga)",
+          "n3_minutes_threshold": "Limiar N2 de offline acumulado (minutos, 0 desliga)",
           "report_time_hour": "Hora do relatório diário (0-23, horário local)",
-          "auto_reset_days": "Zerar estatísticas e estado silencioso a cada N dias (0 = nunca)"
+          "auto_reset_days": "Zerar estatísticas cumulativas a cada N dias (0 = nunca)"
         }
       }
     },
@@ -39,10 +38,9 @@
           "seconds_threshold": "Confirmar queda após (segundos)",
           "coalesce_seconds": "Janela para tratar quedas simultâneas como uma (segundos)",
           "notify_service": "Serviço de notificação (ex: notify.mobile_app_xxx) - opcional",
-          "n1_burst_window_minutes": "Janela do N1.2 (minutos, 0 desliga)",
-          "n3_minutes_threshold": "Limiar de offline N3 (minutos, 0 desliga)",
+          "n3_minutes_threshold": "Limiar N2 de offline acumulado (minutos, 0 desliga)",
           "report_time_hour": "Hora do relatório diário (0-23, horário local)",
-          "auto_reset_days": "Zerar estatísticas e estado silencioso a cada N dias (0 = nunca)"
+          "auto_reset_days": "Zerar estatísticas cumulativas a cada N dias (0 = nunca)"
         }
       }
     },

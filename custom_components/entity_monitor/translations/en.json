@@ -12,10 +12,9 @@
           "seconds_threshold": "Confirm an outage after (seconds)",
           "coalesce_seconds": "Window to treat simultaneous drops as one (seconds)",
           "notify_service": "Notify service (e.g. notify.mobile_app_xxx) - optional",
-          "n1_burst_window_minutes": "N1.2 escalation window (minutes, 0 disables)",
-          "n3_minutes_threshold": "N3 offline threshold (minutes, 0 disables)",
+          "n3_minutes_threshold": "N2 offline threshold (minutes of cumulative downtime, 0 disables)",
           "report_time_hour": "Daily report hour (0-23, local time)",
-          "auto_reset_days": "Auto-reset statistics and silent state every N days (0 = never)"
+          "auto_reset_days": "Auto-reset cumulative statistics every N days (0 = never)"
         }
       }
     },
@@ -39,10 +38,9 @@
           "seconds_threshold": "Confirm an outage after (seconds)",
           "coalesce_seconds": "Window to treat simultaneous drops as one (seconds)",
           "notify_service": "Notify service (e.g. notify.mobile_app_xxx) - optional",
-          "n1_burst_window_minutes": "N1.2 escalation window (minutes, 0 disables)",
-          "n3_minutes_threshold": "N3 offline threshold (minutes, 0 disables)",
+          "n3_minutes_threshold": "N2 offline threshold (minutes of cumulative downtime, 0 disables)",
           "report_time_hour": "Daily report hour (0-23, local time)",
-          "auto_reset_days": "Auto-reset statistics and silent state every N days (0 = never)"
+          "auto_reset_days": "Auto-reset cumulative statistics every N days (0 = never)"
         }
       }
     },
