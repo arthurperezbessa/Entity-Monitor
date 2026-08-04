@@ -80,14 +80,23 @@ integração que teve quedas, e os contadores/flags do dia (`N1 disparou?`,
 | `quiet` | Inicial, no início de cada ciclo diário | 1ª queda do dia → N1, vira `active_today` |
 | `active_today` | N1 já disparou hoje | Próximo `report_time_hour` → volta a `quiet` |
 
+### Título e citação de entidades (todas as notificações)
+
+- **Título**: `[Integração] instável` — igual pros 3 tipos. O que diferencia
+  é o corpo.
+- **Corpo**: até 3 entidades pelo nome. Se tiver 4 ou mais afetadas, mostra
+  as 3 principais + `(+N)` no final, ex: `Aparador, Lustre, Abajur (+2)`.
+- **Ranking**: as 3 são as que **mais caíram** no ciclo (empates resolvidos
+  alfabeticamente por `entity_id`).
+
 ### N1 — Entidade caiu (real-time)
 
 Dispara na 1ª queda do ciclo (integração em `quiet`). **Uma vez por dia**
 por integração.
 
-- **Título**: `[Integração] indisponível`
-- **1 entidade**: `Entidade A caiu.`
-- **≥2 entidades** (mesmo burst): `Entidade A e outras caíram.`
+- **1 entidade**: `Luz Sala caiu.`
+- **≥2 entidades**: `Luz Sala, Tomada Cozinha, Luz Quarto caíram.`
+- **>3 entidades**: `Luz Sala, Tomada Cozinha, Luz Quarto (+2) caíram.`
 
 ### N2 — Offline por X minutos (real-time)
 
@@ -96,26 +105,26 @@ Dispara quando o **tempo acumulado offline** da integração no ciclo
 **Limiar N2** (padrão 30 min). **Uma vez por dia** por integração — se
 voltar a cair depois, você só recebe o N3 amanhã.
 
-- **Título**: `[Integração] offline por 30 minutos`
-- **1 entidade**: `Entidade A ficou 30 minutos offline hoje.`
-- **≥2 entidades**: `Entidade A e outras ficaram 30 minutos offline hoje.`
+- **1 entidade**: `Luz Sala ficou 30 minutos offline hoje.`
+- **≥2 entidades**: `Luz Sala, Tomada Cozinha, Luz Quarto ficaram 30
+  minutos offline hoje.`
 
-A entidade citada é a que acumulou mais tempo offline no ciclo.
+O ranking do N2 usa **tempo acumulado offline** por entidade (a que mais
+ficou fora aparece primeiro).
 
 ### N3 — Relatório diário (`report_time_hour`)
 
 Dispara no `report_time_hour` (padrão 09:00) para cada integração que teve
 **≥1 queda** no ciclo anterior.
 
-- **Título**: `Relatório [Integração]`
-- **1 entidade**: `Entidade A caiu 3 vezes e ficou 47 minutos offline nas
+- **1 entidade**: `Luz Sala caiu 3 vezes e ficou 47 minutos offline nas
   últimas 24 horas.`
-- **≥2 entidades**: `Entidade A e outras caíram 3 vezes e ficaram 47
-  minutos offline nas últimas 24 horas.`
+- **≥2 entidades**: `Luz Sala, Tomada Cozinha, Luz Quarto caíram 7 vezes e
+  ficaram 2h 47min offline nas últimas 24 horas.`
 
-A entidade citada é a que mais caiu. A duração é a **união** de todos os
-intervalos offline da integração no ciclo (overlaps contam uma vez).
-Formatada como `X segundos`, `X minutos` ou `Xh Ymin`.
+A duração é a **união** de todos os intervalos offline da integração no
+ciclo (overlaps contam uma vez). Formatada como `X segundos`, `X minutos`
+ou `Xh Ymin`.
 
 ### Como o tempo é somado
 
@@ -127,12 +136,6 @@ Formatada como `X segundos`, `X minutos` ou `Xh Ymin`.
   sobreposto com B ficando 10 min, conta 10 min (não 20).
 - Isso vale tanto pro N2 (real-time) quanto pro N3 (relatório).
 
-### Citação de entidade
-
-Em todas as notificações **apenas uma entidade é citada** pelo nome. Se
-houver outras envolvidas, vem `"e outras"` — sem listar quem. Isso é
-intencional pra não inchar a notificação.
-
 ### Evento `entity_monitor_notification`
 
 Cada notificação dispara o evento `entity_monitor_notification`:
@@ -143,8 +146,9 @@ Cada notificação dispara o evento `entity_monitor_notification`:
 | `integration_name` | Nome amigável (ex: `Local Tuya`). |
 | `kind` | `n1` / `n2` / `n3` / `test`. |
 | `scope` | `entity` (1 entidade) ou `integration` (≥2). |
-| `entity_id`, `entity_name` | Entidade citada no corpo. |
-| `has_others` | `true` se houve "e outras". |
+| `entity_ids` | Até 3 entidades citadas, ordem = ranking. |
+| `entity_names` | Nomes amigáveis correspondentes. |
+| `total_affected` | Nº total de entidades afetadas no ciclo. |
 | `outage_count` | Nº de quedas (bursts) no ciclo (N3). |
 | `threshold_seconds` | Limiar acionado (N2). |
 | `duration_seconds` | União do tempo offline (N2 e N3). |

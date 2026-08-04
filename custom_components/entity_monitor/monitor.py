@@ -800,16 +800,13 @@ class EntityMonitor:
         state.state = STATE_ACTIVE_TODAY
         state.n1_fired = True
 
-        scope, entity_id, entity_name, has_others = self._scope_for_entities(
-            burst.entities
-        )
+        # All entities in the first burst fell once — sort by entity_id so
+        # the citation stays deterministic across restarts.
+        ranked = sorted(set(burst.entities))
         self._dispatch_notification(
             integration=integration,
             kind=NOTIFY_N1,
-            scope=scope,
-            entity_id=entity_id,
-            entity_name=entity_name,
-            has_others=has_others,
+            ranked_entity_ids=ranked,
         )
 
     # -- N2: accumulated offline crosses threshold ----------------------------
@@ -895,17 +892,17 @@ class EntityMonitor:
             return
 
         state.n2_fired = True
-        most_eid = max(per_entity.items(), key=lambda kv: (kv[1], kv[0]))[0]
-        entities_offline = list(per_entity.keys())
-        has_others = len(entities_offline) > 1
-        scope = SCOPE_INTEGRATION if has_others else SCOPE_ENTITY
+        # Rank by cumulative offline (desc), tie-break by entity_id (asc).
+        ranked = [
+            eid
+            for eid, _ in sorted(
+                per_entity.items(), key=lambda kv: (-kv[1], kv[0])
+            )
+        ]
         self._dispatch_notification(
             integration=integration,
             kind=NOTIFY_N2,
-            scope=scope,
-            entity_id=most_eid,
-            entity_name=self._friendly_name(most_eid),
-            has_others=has_others,
+            ranked_entity_ids=ranked,
             duration_seconds=union_seconds,
             threshold_seconds=self.n3_minutes_threshold * 60,
         )
@@ -996,17 +993,22 @@ class EntityMonitor:
         union_input = [(start, end) for _, start, end in intervals]
         union_seconds = _union_seconds(union_input)
 
-        most_eid = self._most_frequent_entity(bursts)
-        unique = self._unique_entities(bursts)
-        has_others = len(unique) > 1
-        scope = SCOPE_INTEGRATION if has_others else SCOPE_ENTITY
+        counter: Counter[str] = Counter()
+        for burst in bursts:
+            for eid in burst.entities:
+                counter[eid] += 1
+        if not counter:
+            return
+        ranked = [
+            eid
+            for eid, _ in sorted(
+                counter.items(), key=lambda kv: (-kv[1], kv[0])
+            )
+        ]
         self._dispatch_notification(
             integration=integration,
             kind=NOTIFY_N3,
-            scope=scope,
-            entity_id=most_eid,
-            entity_name=self._friendly_name(most_eid) if most_eid else "",
-            has_others=has_others,
+            ranked_entity_ids=ranked,
             outage_count=len(bursts),
             duration_seconds=union_seconds,
         )
@@ -1019,20 +1021,22 @@ class EntityMonitor:
         *,
         integration: str,
         kind: str,
-        scope: str,
-        entity_id: str | None = None,
-        entity_name: str = "",
-        has_others: bool = False,
+        ranked_entity_ids: list[str],
         outage_count: int = 0,
         threshold_seconds: int = 0,
         duration_seconds: float = 0.0,
     ) -> None:
         integration_name = self._integration_name(integration)
+        total_affected = len(ranked_entity_ids)
+        top_ids = ranked_entity_ids[:3]
+        top_names = [self._friendly_name(eid) for eid in top_ids]
+        scope = SCOPE_INTEGRATION if total_affected > 1 else SCOPE_ENTITY
+
         title, message = self._build_message(
             kind=kind,
             integration_name=integration_name,
-            entity_name=entity_name,
-            has_others=has_others,
+            top_names=top_names,
+            total_affected=total_affected,
             outage_count=outage_count,
             duration_seconds=duration_seconds,
         )
@@ -1043,9 +1047,9 @@ class EntityMonitor:
                 "integration_name": integration_name,
                 "kind": kind,
                 "scope": scope,
-                "entity_id": entity_id,
-                "entity_name": entity_name,
-                "has_others": has_others,
+                "entity_ids": top_ids,
+                "entity_names": top_names,
+                "total_affected": total_affected,
                 "outage_count": outage_count,
                 "threshold_seconds": threshold_seconds,
                 "duration_seconds": round(duration_seconds, 1),
@@ -1063,35 +1067,45 @@ class EntityMonitor:
         *,
         kind: str,
         integration_name: str,
-        entity_name: str,
-        has_others: bool,
+        top_names: list[str],
+        total_affected: int,
         outage_count: int,
         duration_seconds: float,
     ) -> tuple[str, str]:
-        subject = f"{entity_name} e outras" if has_others else entity_name
-        verb_caiu = "caíram" if has_others else "caiu"
-        verb_ficaram = "ficaram" if has_others else "ficou"
+        subject = self._format_subject(top_names, total_affected)
+        plural = total_affected > 1
+        verb_caiu = "caíram" if plural else "caiu"
+        verb_ficaram = "ficaram" if plural else "ficou"
+        title = f"{integration_name} instável"
 
         if kind == NOTIFY_N1:
-            return (
-                f"{integration_name} indisponível",
-                f"{subject} {verb_caiu}.",
-            )
+            return (title, f"{subject} {verb_caiu}.")
         if kind == NOTIFY_N2:
             duration = format_duration_pt(duration_seconds)
             return (
-                f"{integration_name} offline por {duration}",
+                title,
                 f"{subject} {verb_ficaram} {duration} offline hoje.",
             )
         if kind == NOTIFY_N3:
             duration = format_duration_pt(duration_seconds)
             vezes = "vezes" if outage_count != 1 else "vez"
             return (
-                f"Relatório {integration_name}",
+                title,
                 f"{subject} {verb_caiu} {outage_count} {vezes} e "
                 f"{verb_ficaram} {duration} offline nas últimas 24 horas.",
             )
         return ("", "")
+
+    @staticmethod
+    def _format_subject(top_names: list[str], total_affected: int) -> str:
+        """Format the entity list: 'A, B, C' or 'A, B, C (+2)' when >3."""
+        if not top_names:
+            return ""
+        joined = ", ".join(top_names)
+        extra = total_affected - len(top_names)
+        if extra > 0:
+            return f"{joined} (+{extra})"
+        return joined
 
     @callback
     def async_send_test_notification(self) -> bool:
@@ -1107,9 +1121,9 @@ class EntityMonitor:
                 "integration_name": "Entity Monitor",
                 "kind": NOTIFY_TEST,
                 "scope": SCOPE_INTEGRATION,
-                "entity_id": None,
-                "entity_name": "",
-                "has_others": False,
+                "entity_ids": [],
+                "entity_names": [],
+                "total_affected": 0,
                 "outage_count": 0,
                 "threshold_seconds": 0,
                 "duration_seconds": 0,
@@ -1309,36 +1323,6 @@ class EntityMonitor:
         return ranked
 
     # -- Internal helpers ------------------------------------------------------
-
-    @staticmethod
-    def _most_frequent_entity(bursts: list[IntegrationBurst]) -> str:
-        counter: Counter[str] = Counter()
-        for burst in bursts:
-            for entity_id in burst.entities:
-                counter[entity_id] += 1
-        if not counter:
-            return ""
-        most_common = counter.most_common()
-        top_count = most_common[0][1]
-        ties = sorted([eid for eid, c in most_common if c == top_count])
-        return ties[0]
-
-    @staticmethod
-    def _unique_entities(bursts: list[IntegrationBurst]) -> set[str]:
-        result: set[str] = set()
-        for burst in bursts:
-            result.update(burst.entities)
-        return result
-
-    def _scope_for_entities(
-        self, entity_ids: list[str]
-    ) -> tuple[str, str | None, str, bool]:
-        if not entity_ids:
-            return (SCOPE_INTEGRATION, None, "", False)
-        primary = entity_ids[0]
-        has_others = len(entity_ids) > 1
-        scope = SCOPE_INTEGRATION if has_others else SCOPE_ENTITY
-        return (scope, primary, self._friendly_name(primary), has_others)
 
     @callback
     def _data_for_storage(self) -> dict:
