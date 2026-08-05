@@ -7,8 +7,8 @@ um conjunto enxuto de notificações + relatório diário no horário escolhido.
 ## O que ela faz
 
 - Acompanha uma lista de entidades escolhida por você.
-- Dispara notificações em 3 níveis (N1, N2, N3) — ver
-  [Notificações](#notificações).
+- Dispara 3 tipos de notificação: **N1** (primeira queda), **N2** (offline
+  acumulado ultrapassou o limiar) e **N3** (relatório diário).
 - Permite **excluir** entidades específicas mesmo dentro de uma integração
   monitorada.
 - Guarda o histórico de quedas (sobrevive a reinícios do HA): quantas vezes
@@ -38,22 +38,20 @@ um conjunto enxuto de notificações + relatório diário no horário escolhido.
    - **Entidades extras** *(opcional)* — entidades avulsas mesmo que a
      integração delas não esteja selecionada.
    - **Entidades a ignorar** *(opcional)* — entidades a excluir do
-     monitoramento, mesmo que façam parte de uma integração monitorada. Some
-     completamente (sem stats, sem notificação, sem aparecer no relatório).
+     monitoramento, mesmo que façam parte de uma integração monitorada.
+     Some completamente (sem stats, sem notificação, sem aparecer no
+     relatório).
    - **Confirmar queda após (segundos)** — padrão `30`.
    - **Janela de quedas simultâneas (segundos)** — padrão `20`.
    - **Serviço de notificação** *(opcional)* — `notify.*` que recebe os
      avisos.
-   - **Janela do N1.2 (minutos)** — janela em que a 2ª queda dispara o N1.2.
-     Padrão `30`.
-   - **Limiar de offline N3 (minutos)** — uma entidade nesse tempo contínuo
-     offline dispara o N3.1. Também é o limiar pra inclusão no relatório
-     diário N3.2. Padrão `30`.
-   - **Hora do relatório diário (0-23)** — quando os relatórios N2/N3.2
-     disparam. Padrão `7` (07:00 local).
-   - **Reset automático (dias)** — zera estatísticas E reseta o estado
-     `silent → quiet` quando passam N dias sem qualquer queda na integração.
-     Padrão `30`. `0` desliga ambos.
+   - **Limiar N2 (minutos)** — quando o **tempo acumulado offline** da
+     integração no dia (união das quedas) cruza esse valor, dispara o N2.
+     Padrão `30`. `0` desliga N2.
+   - **Hora do relatório diário (0-23)** — quando o N3 dispara e o ciclo
+     reinicia. Padrão `9` (09:00 local).
+   - **Reset automático (dias)** — zera estatísticas cumulativas quando
+     passam N dias. Padrão `30`. `0` desliga.
 
 ## O que é criado
 
@@ -68,80 +66,75 @@ um conjunto enxuto de notificações + relatório diário no horário escolhido.
 
 ## Notificações
 
-### Estados por integração
+### Ciclo diário
 
-Cada integração caminha por 3 estados:
+O ciclo é alinhado com o **horário do relatório** (padrão `09:00`). Um "dia"
+vai das 09:00 de ontem às 08:59 de hoje. Nas 09:00, o N3 dispara para toda
+integração que teve quedas, e os contadores/flags do dia (`N1 disparou?`,
+`N2 disparou?`) zeram — o próximo `N1` só vai voltar a disparar amanhã.
+
+### Estados por integração
 
 | Estado | Como entra | Como sai |
 | --- | --- | --- |
-| `quiet` | Inicial, ou após 30 dias sem nenhuma queda | 1ª queda → N1.1, vira `active_day1` |
-| `active_day1` | N1.1 acabou de disparar | No próximo `report_time` (07:00 default) → `silent` |
-| `silent` | Já passou o `report_time` desde N1.1 | 30 dias seguidos sem queda → `quiet` |
+| `quiet` | Inicial, no início de cada ciclo diário | 1ª queda do dia → N1, vira `active_today` |
+| `active_today` | N1 já disparou hoje | Próximo `report_time_hour` → volta a `quiet` |
 
-### N1.1 — Primeira queda
+### Título e citação de entidades (todas as notificações)
 
-Dispara quando a integração estava em `quiet` e acontece uma queda.
+- **Título**: `[Integração] instável` — igual pros 3 tipos. O que diferencia
+  é o corpo.
+- **Corpo**: até 3 entidades pelo nome. Se tiver 4 ou mais afetadas, mostra
+  as 3 principais + `(+N)` no final, ex: `Aparador, Lustre, Abajur (+2)`.
+- **Ranking**: as 3 são as que **mais caíram** no ciclo (empates resolvidos
+  alfabeticamente por `entity_id`).
 
-- **Título**: `[Integração] instável`
-- **1 entidade**: `Entidade A caiu.`
-- **≥2 entidades** (mesmo burst): `Entidade A e outras caíram.`
+### N1 — Entidade caiu (real-time)
 
-### N1.2 — Padrão de instabilidade
+Dispara na 1ª queda do ciclo (integração em `quiet`). **Uma vez por dia**
+por integração.
 
-Dispara quando, durante `active_day1`, acontece uma 2ª queda **dentro da
-janela do N1.2** (padrão 30 min) a partir da 1ª. **Uma única vez** por
-período ativo.
+- **1 entidade**: `Luz Sala caiu.`
+- **≥2 entidades**: `Luz Sala, Tomada Cozinha, Luz Quarto caíram.`
+- **>3 entidades**: `Luz Sala, Tomada Cozinha, Luz Quarto (+2) caíram.`
 
-- **Título**: `[Integração] instável`
-- A entidade citada é a que **mais caiu** nas bursts do dia.
-- **1 entidade afetada no total**: `Entidade A caiu X vezes nos últimos
-  Y minutos.`
-- **≥2 entidades**: `Entidade A e outras caíram X vezes nos últimos Y
-  minutos.`
-- X = nº de bursts até o disparo. Y = janela configurada.
+### N2 — Offline por X minutos (real-time)
 
-### N2 — Relatório de quedas (diário)
+Dispara quando o **tempo acumulado offline** da integração no ciclo
+(**união** dos intervalos, incluindo o outage em curso) cruza o
+**Limiar N2** (padrão 30 min). **Uma vez por dia** por integração — se
+voltar a cair depois, você só recebe o N3 amanhã.
 
-Dispara no `report_time` (07:00 default) para cada integração que teve
-**≥1 queda** no ciclo anterior (ciclo = das 07:00 de ontem às 06:59 de
-hoje).
+- **1 entidade**: `Luz Sala ficou 30 minutos offline hoje.`
+- **≥2 entidades**: `Luz Sala, Tomada Cozinha, Luz Quarto ficaram 30
+  minutos offline hoje.`
 
-- **Título**: `Relatório [Integração]`
-- **1 entidade afetada no total**: `Entidade A caiu X vezes ontem.`
-- **≥2 entidades**: `Entidade A e outras caíram X vezes ontem.`
-- A entidade citada é a que mais caiu no ciclo. X = total de bursts.
+O ranking do N2 usa **tempo acumulado offline** por entidade (a que mais
+ficou fora aparece primeiro).
 
-### N3.1 — Offline prolongado (em tempo real)
+### N3 — Relatório diário (`report_time_hour`)
 
-Dispara quando uma entidade fica offline **continuamente** por mais que o
-**Limiar de offline N3** (padrão 30 min). **Independente** do estado N1.
-Uma única vez por outage da integração — só rearma quando todas as
-entidades dela voltarem ao normal.
+Dispara no `report_time_hour` (padrão 09:00) para cada integração que teve
+**≥1 queda** no ciclo anterior.
 
-- **Título**: `[Integração] offline por mais de 30 minutos`
-- A entidade citada é a que está offline há mais tempo.
-- **1 entidade afetada**: `Entidade A offline por 30 minutos.`
-- **≥2 entidades**: `Entidade A e outras offline por 30 minutos.`
+- **1 entidade**: `Luz Sala caiu 3 vezes e ficou 47 minutos offline nas
+  últimas 24 horas.`
+- **≥2 entidades**: `Luz Sala, Tomada Cozinha, Luz Quarto caíram 7 vezes e
+  ficaram 2h 47min offline nas últimas 24 horas.`
 
-### N3.2 — Relatório de offline (diário)
+A duração é a **união** de todos os intervalos offline da integração no
+ciclo (overlaps contam uma vez). Formatada como `X segundos`, `X minutos`
+ou `Xh Ymin`.
 
-Dispara no `report_time` para cada integração em que **pelo menos uma
-entidade teve um único outage ≥ limiar N3** no ciclo anterior.
+### Como o tempo é somado
 
-- **Título**: `[Integração] offline por {duração}`
-- A entidade citada é a que mais acumulou offline.
-- **1 entidade afetada**: `Entidade A ficou offline por {duração} ontem.`
-- **≥2 entidades**: `Entidade A e outras ficaram offline por {duração}
-  ontem.`
-- `{duração}` é a **união** do tempo em que **pelo menos 1 entidade** da
-  integração esteve offline (overlaps contam uma vez). Auto-formatado em
-  `Xh Ym` ou `Xm`.
-
-### Citação de entidade
-
-Em todas as notificações **apenas uma entidade é citada** pelo nome. Se
-houver outras envolvidas, vem `"e outras"` — sem listar quem. Isso é
-intencional pra não inchar a notificação.
+- Cada outage é armazenado como um intervalo `(entity_id, start, end)`.
+- Enquanto a entidade ainda está caída, `end = agora` (o tempo cresce em
+  tempo real).
+- Para o "tempo offline" da **integração**, é feita a **união** entre os
+  intervalos das entidades daquela integração — se A ficou 10 min
+  sobreposto com B ficando 10 min, conta 10 min (não 20).
+- Isso vale tanto pro N2 (real-time) quanto pro N3 (relatório).
 
 ### Evento `entity_monitor_notification`
 
@@ -151,14 +144,14 @@ Cada notificação dispara o evento `entity_monitor_notification`:
 | --- | --- |
 | `integration` | Slug (ex: `localtuya`). |
 | `integration_name` | Nome amigável (ex: `Local Tuya`). |
-| `kind` | `n1_1` / `n1_2` / `n2` / `n3_1` / `n3_2` / `test`. |
+| `kind` | `n1` / `n2` / `n3` / `test`. |
 | `scope` | `entity` (1 entidade) ou `integration` (≥2). |
-| `entity_id`, `entity_name` | Entidade citada no corpo. |
-| `has_others` | `true` se houve "e outras". |
-| `outage_count` | X em N1.2/N2. |
-| `window_minutes` | Y em N1.2. |
-| `threshold_seconds` | Limiar do N3.1. |
-| `duration_seconds` | Duração-união do N3.2. |
+| `entity_ids` | Até 3 entidades citadas, ordem = ranking. |
+| `entity_names` | Nomes amigáveis correspondentes. |
+| `total_affected` | Nº total de entidades afetadas no ciclo. |
+| `outage_count` | Nº de quedas (bursts) no ciclo (N3). |
+| `threshold_seconds` | Limiar acionado (N2). |
+| `duration_seconds` | União do tempo offline (N2 e N3). |
 | `title`, `message` | Conteúdo final. |
 
 ## Persistência
@@ -166,7 +159,7 @@ Cada notificação dispara o evento `entity_monitor_notification`:
 Tudo é salvo em disco:
 
 - Estatísticas cumulativas (entidades e integrações).
-- Estado N1/N3 por integração.
+- Estado por integração (`quiet` vs `active_today`, `n1_fired`, `n2_fired`).
 - Buffer do ciclo atual (bursts + intervalos de offline).
 - `started_at` dos outages em curso — restart **nunca conta a partir do
   boot**, retoma do momento real da queda.
@@ -175,28 +168,27 @@ Tudo é salvo em disco:
 
 Dois caminhos:
 
-- **`Reset estatísticas`** — só zera contadores cumulativos. Estado N1/N3
-  preservado.
+- **`Reset estatísticas`** — só zera contadores cumulativos. Estado do
+  ciclo preservado.
 - **`Reset tudo`** — zera estatísticas, estado, ciclo atual e timers de
   outages em curso. Botão `button.entity_monitor_reset_all` ou serviço
   `entity_monitor.reset_all`.
 
-Reset automático: a cada `auto_reset_days` (padrão 30) tanto os contadores
-cumulativos zeram quanto o estado `silent → quiet` reseta. `0` desliga.
+Reset automático: a cada `auto_reset_days` (padrão 30) os contadores
+cumulativos são zerados. `0` desliga.
 
 ## Testar a notificação
 
 - **Botão** `button.entity_monitor_test_notification`.
 - **Serviço** `entity_monitor.test_notification`.
 
-Em ambos o evento `entity_monitor_notification` é disparado com
+Em ambos, o evento `entity_monitor_notification` é disparado com
 `kind: "test"` e `test: true`.
 
 ## Eventos disparados
 
-- `entity_monitor_unavailable` — em cada cruzamento de limiar
-  (`level=seconds` no `seconds_threshold`, `level=minutes` no
-  `n3_minutes_threshold`).
+- `entity_monitor_unavailable` — quando o `seconds_threshold` de uma
+  entidade é atingido (`level=seconds`).
 - `entity_monitor_recovered` — quando a entidade volta ao normal.
 - `entity_monitor_notification` — em cada notificação (ver tabela).
 - `entity_monitor_report` — quando o serviço de relatório roda.
@@ -219,8 +211,7 @@ para receber inline). Retorna ranking por entidade e por integração.
 | `excluded_entities` | — | Entidades a ignorar por completo |
 | `seconds_threshold` | `30` | Segundos pra confirmar uma queda |
 | `coalesce_seconds` | `20` | Janela de quedas simultâneas |
-| `n1_burst_window_minutes` | `30` | Y do N1.2 (0 desliga N1.2) |
-| `n3_minutes_threshold` | `30` | Limiar N3.1 e inclusão N3.2 (0 desliga N3) |
-| `report_time_hour` | `7` | Hora local dos relatórios diários (0-23) |
+| `n3_minutes_threshold` | `30` | Limiar N2 de offline acumulado (0 desliga N2) |
+| `report_time_hour` | `9` | Hora local do relatório diário (0-23) |
 | `notify_service` | — | Serviço `notify.*` |
-| `auto_reset_days` | `30` | Reset auto de stats e estado (`0` desliga) |
+| `auto_reset_days` | `30` | Reset auto de estatísticas cumulativas (`0` desliga) |

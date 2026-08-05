@@ -32,7 +32,6 @@ from .const import (
     CONF_ENTITIES,
     CONF_EXCLUDED_ENTITIES,
     CONF_INTEGRATIONS,
-    CONF_N1_BURST_WINDOW_MINUTES,
     CONF_N3_MINUTES_THRESHOLD,
     CONF_NOTIFY_SERVICE,
     CONF_ONLY_PRIMARY,
@@ -40,7 +39,6 @@ from .const import (
     CONF_SECONDS_THRESHOLD,
     DEFAULT_AUTO_RESET_DAYS,
     DEFAULT_COALESCE_SECONDS,
-    DEFAULT_N1_BURST_WINDOW_MINUTES,
     DEFAULT_N3_MINUTES_THRESHOLD,
     DEFAULT_NAME,
     DEFAULT_ONLY_PRIMARY,
@@ -121,21 +119,6 @@ def _build_schema(
                 default=defaults.get(CONF_NOTIFY_SERVICE, ""),
             ): TextSelector(),
             vol.Required(
-                CONF_N1_BURST_WINDOW_MINUTES,
-                default=defaults.get(
-                    CONF_N1_BURST_WINDOW_MINUTES,
-                    DEFAULT_N1_BURST_WINDOW_MINUTES,
-                ),
-            ): NumberSelector(
-                NumberSelectorConfig(
-                    min=0,
-                    max=1440,
-                    step=1,
-                    unit_of_measurement="min",
-                    mode=NumberSelectorMode.BOX,
-                )
-            ),
-            vol.Required(
                 CONF_N3_MINUTES_THRESHOLD,
                 default=defaults.get(
                     CONF_N3_MINUTES_THRESHOLD,
@@ -194,9 +177,6 @@ def _normalise(user_input: dict[str, Any]) -> dict[str, Any]:
         CONF_SECONDS_THRESHOLD: int(user_input[CONF_SECONDS_THRESHOLD]),
         CONF_COALESCE_SECONDS: int(user_input[CONF_COALESCE_SECONDS]),
         CONF_NOTIFY_SERVICE: user_input.get(CONF_NOTIFY_SERVICE, "").strip(),
-        CONF_N1_BURST_WINDOW_MINUTES: int(
-            user_input[CONF_N1_BURST_WINDOW_MINUTES]
-        ),
         CONF_N3_MINUTES_THRESHOLD: int(
             user_input[CONF_N3_MINUTES_THRESHOLD]
         ),
