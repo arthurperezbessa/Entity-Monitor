@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from functools import partial
@@ -75,18 +74,25 @@ def format_duration(seconds: float) -> str:
 
 
 def format_duration_pt(seconds: float) -> str:
-    """Return a user-friendly duration for notification bodies (pt-BR)."""
-    seconds = int(round(seconds))
-    if seconds <= 0:
-        return "0 segundos"
-    if seconds < 60:
-        return f"{seconds} segundos"
-    minutes, _ = divmod(seconds, 60)
+    """Return a compact duration for notification bodies.
+
+    Format:
+    - `< 60s`  →  `Xs`
+    - `< 3600s` →  `Xm`  (minutes truncated, seconds dropped)
+    - `>= 3600s` →  `XhYm` (or just `Xh` when minutes = 0)
+    """
+    total = int(seconds)
+    if total <= 0:
+        return "0s"
+    if total < 60:
+        return f"{total}s"
+    minutes = total // 60
     if minutes < 60:
-        return f"{minutes} minutos"
-    hours, minutes = divmod(minutes, 60)
-    if minutes:
-        return f"{hours}h {minutes}min"
+        return f"{minutes}m"
+    hours = minutes // 60
+    remaining_minutes = minutes % 60
+    if remaining_minutes:
+        return f"{hours}h{remaining_minutes}m"
     return f"{hours}h"
 
 
@@ -273,26 +279,6 @@ class IntegrationCycleState:
                 for i in data.get("cycle_intervals", [])
             ],
         )
-
-
-def _union_seconds(
-    intervals: list[tuple[datetime, datetime]],
-) -> float:
-    """Return the total duration covered by a union of (start, end) intervals."""
-    if not intervals:
-        return 0.0
-    sorted_intervals = sorted(intervals, key=lambda i: i[0])
-    total = 0.0
-    cur_start, cur_end = sorted_intervals[0]
-    for start, end in sorted_intervals[1:]:
-        if start <= cur_end:
-            if end > cur_end:
-                cur_end = end
-        else:
-            total += (cur_end - cur_start).total_seconds()
-            cur_start, cur_end = start, end
-    total += (cur_end - cur_start).total_seconds()
-    return total
 
 
 class EntityMonitor:
@@ -811,25 +797,29 @@ class EntityMonitor:
 
     # -- N2: accumulated offline crosses threshold ----------------------------
 
-    def _current_union_seconds(
+    def _current_per_entity_totals(
         self, state: IntegrationCycleState, now: datetime
-    ) -> tuple[float, dict[str, float]]:
-        """Return (union_seconds, per_entity_total) for the cycle so far."""
-        union_input: list[tuple[datetime, datetime]] = []
+    ) -> dict[str, float]:
+        """Return per-entity cumulative offline seconds in the cycle so far."""
         per_entity_total: dict[str, float] = {}
         for iv in state.cycle_intervals:
             end = iv.end if iv.end is not None else now
             if end <= iv.start:
                 continue
-            union_input.append((iv.start, end))
             per_entity_total[iv.entity_id] = per_entity_total.get(
                 iv.entity_id, 0.0
             ) + (end - iv.start).total_seconds()
-        return _union_seconds(union_input), per_entity_total
+        return per_entity_total
 
     @callback
     def _reevaluate_n2_timer(self, integration: str) -> None:
-        """(Re)schedule the N2 timer for an integration."""
+        """(Re)schedule the N2 timer for an integration.
+
+        N2 fires when the *single entity* with the most cumulative offline
+        time in the cycle crosses the threshold. Timer picks the shortest
+        remaining time across all currently-offline entities (whichever
+        will hit the threshold first).
+        """
         cancel = self._n2_timers.pop(integration, None)
         if cancel is not None:
             cancel()
@@ -843,20 +833,29 @@ class EntityMonitor:
             return
 
         now = dt_util.utcnow()
-        union_seconds, _ = self._current_union_seconds(state, now)
-
-        if union_seconds >= threshold_seconds:
+        per_entity = self._current_per_entity_totals(state, now)
+        if per_entity and max(per_entity.values()) >= threshold_seconds:
             self._fire_n2(integration)
             return
 
-        has_open = any(iv.end is None for iv in state.cycle_intervals)
-        if not has_open:
+        currently_offline = {
+            iv.entity_id for iv in state.cycle_intervals if iv.end is None
+        }
+        if not currently_offline:
             return
 
-        remaining = max(threshold_seconds - union_seconds, 1.0)
+        remaining_per_entity = [
+            threshold_seconds - per_entity.get(eid, 0.0)
+            for eid in currently_offline
+        ]
+        min_remaining = min(remaining_per_entity)
+        if min_remaining <= 0:
+            self._fire_n2(integration)
+            return
+
         self._n2_timers[integration] = async_call_later(
             self.hass,
-            remaining,
+            max(min_remaining, 1.0),
             partial(self._fire_n2_if_qualified, integration),
         )
 
@@ -872,12 +871,12 @@ class EntityMonitor:
         if threshold_seconds <= 0:
             return
         now = dt_util.utcnow()
-        union_seconds, _ = self._current_union_seconds(state, now)
-        if union_seconds >= threshold_seconds:
+        per_entity = self._current_per_entity_totals(state, now)
+        if per_entity and max(per_entity.values()) >= threshold_seconds:
             self._fire_n2(integration)
         else:
-            # Union came back below threshold (e.g. all outages recovered
-            # slightly before the timer fired). Re-arm.
+            # The leading entity recovered a hair before the timer, so its
+            # total stopped growing. Re-arm from what's still open.
             self._reevaluate_n2_timer(integration)
 
     @callback
@@ -887,7 +886,7 @@ class EntityMonitor:
             return
 
         now = dt_util.utcnow()
-        union_seconds, per_entity = self._current_union_seconds(state, now)
+        per_entity = self._current_per_entity_totals(state, now)
         if not per_entity:
             return
 
@@ -903,7 +902,7 @@ class EntityMonitor:
             integration=integration,
             kind=NOTIFY_N2,
             ranked_entity_ids=ranked,
-            duration_seconds=union_seconds,
+            per_entity_seconds=per_entity,
             threshold_seconds=self.n3_minutes_threshold * 60,
         )
         self._store.async_delay_save(self._data_for_storage, 5)
@@ -990,27 +989,26 @@ class EntityMonitor:
         if not bursts:
             return
 
-        union_input = [(start, end) for _, start, end in intervals]
-        union_seconds = _union_seconds(union_input)
-
-        counter: Counter[str] = Counter()
-        for burst in bursts:
-            for eid in burst.entities:
-                counter[eid] += 1
-        if not counter:
+        per_entity: dict[str, float] = {}
+        for entity_id, start, end in intervals:
+            duration = (end - start).total_seconds()
+            if duration <= 0:
+                continue
+            per_entity[entity_id] = per_entity.get(entity_id, 0.0) + duration
+        if not per_entity:
             return
         ranked = [
             eid
             for eid, _ in sorted(
-                counter.items(), key=lambda kv: (-kv[1], kv[0])
+                per_entity.items(), key=lambda kv: (-kv[1], kv[0])
             )
         ]
         self._dispatch_notification(
             integration=integration,
             kind=NOTIFY_N3,
             ranked_entity_ids=ranked,
+            per_entity_seconds=per_entity,
             outage_count=len(bursts),
-            duration_seconds=union_seconds,
         )
 
     # -- Notification dispatch -------------------------------------------------
@@ -1022,24 +1020,30 @@ class EntityMonitor:
         integration: str,
         kind: str,
         ranked_entity_ids: list[str],
+        per_entity_seconds: dict[str, float] | None = None,
         outage_count: int = 0,
         threshold_seconds: int = 0,
-        duration_seconds: float = 0.0,
     ) -> None:
         integration_name = self._integration_name(integration)
         total_affected = len(ranked_entity_ids)
         top_ids = ranked_entity_ids[:3]
         top_names = [self._friendly_name(eid) for eid in top_ids]
+        top_seconds = [
+            (per_entity_seconds.get(eid, 0.0) if per_entity_seconds else 0.0)
+            for eid in top_ids
+        ]
         scope = SCOPE_INTEGRATION if total_affected > 1 else SCOPE_ENTITY
 
         title, message = self._build_message(
             kind=kind,
             integration_name=integration_name,
             top_names=top_names,
+            top_seconds=top_seconds,
             total_affected=total_affected,
             outage_count=outage_count,
-            duration_seconds=duration_seconds,
+            show_times=per_entity_seconds is not None,
         )
+        duration_seconds = top_seconds[0] if top_seconds else 0.0
         self.hass.bus.async_fire(
             EVENT_NOTIFICATION,
             {
@@ -1049,6 +1053,7 @@ class EntityMonitor:
                 "scope": scope,
                 "entity_ids": top_ids,
                 "entity_names": top_names,
+                "entity_seconds": [round(s, 1) for s in top_seconds],
                 "total_affected": total_affected,
                 "outage_count": outage_count,
                 "threshold_seconds": threshold_seconds,
@@ -1068,11 +1073,14 @@ class EntityMonitor:
         kind: str,
         integration_name: str,
         top_names: list[str],
+        top_seconds: list[float],
         total_affected: int,
         outage_count: int,
-        duration_seconds: float,
+        show_times: bool,
     ) -> tuple[str, str]:
-        subject = self._format_subject(top_names, total_affected)
+        subject = self._format_subject(
+            top_names, top_seconds, total_affected, show_times
+        )
         plural = total_affected > 1
         verb_caiu = "caíram" if plural else "caiu"
         verb_ficaram = "ficaram" if plural else "ficou"
@@ -1081,27 +1089,34 @@ class EntityMonitor:
         if kind == NOTIFY_N1:
             return (title, f"{subject} {verb_caiu}.")
         if kind == NOTIFY_N2:
-            duration = format_duration_pt(duration_seconds)
-            return (
-                title,
-                f"{subject} {verb_ficaram} {duration} offline hoje.",
-            )
+            return (title, f"{subject} {verb_ficaram} offline hoje.")
         if kind == NOTIFY_N3:
-            duration = format_duration_pt(duration_seconds)
             vezes = "vezes" if outage_count != 1 else "vez"
             return (
                 title,
-                f"{subject} {verb_caiu} {outage_count} {vezes} e "
-                f"{verb_ficaram} {duration} offline nas últimas 24 horas.",
+                f"{subject} {verb_caiu} {outage_count} {vezes} nas "
+                f"últimas 24 horas.",
             )
         return ("", "")
 
     @staticmethod
-    def _format_subject(top_names: list[str], total_affected: int) -> str:
-        """Format the entity list: 'A, B, C' or 'A, B, C (+2)' when >3."""
+    def _format_subject(
+        top_names: list[str],
+        top_seconds: list[float],
+        total_affected: int,
+        show_times: bool,
+    ) -> str:
+        """Format 'A (10m), B (5m), C (2m)' — or without times for N1."""
         if not top_names:
             return ""
-        joined = ", ".join(top_names)
+        if show_times:
+            parts = [
+                f"{name} ({format_duration_pt(sec)})"
+                for name, sec in zip(top_names, top_seconds)
+            ]
+        else:
+            parts = list(top_names)
+        joined = ", ".join(parts)
         extra = total_affected - len(top_names)
         if extra > 0:
             return f"{joined} (+{extra})"
@@ -1123,6 +1138,7 @@ class EntityMonitor:
                 "scope": SCOPE_INTEGRATION,
                 "entity_ids": [],
                 "entity_names": [],
+                "entity_seconds": [],
                 "total_affected": 0,
                 "outage_count": 0,
                 "threshold_seconds": 0,

@@ -84,57 +84,58 @@ integração que teve quedas, e os contadores/flags do dia (`N1 disparou?`,
 
 - **Título**: `[Integração] instável` — igual pros 3 tipos. O que diferencia
   é o corpo.
-- **Corpo**: até 3 entidades pelo nome. Se tiver 4 ou mais afetadas, mostra
-  as 3 principais + `(+N)` no final, ex: `Aparador, Lustre, Abajur (+2)`.
-- **Ranking**: as 3 são as que **mais caíram** no ciclo (empates resolvidos
-  alfabeticamente por `entity_id`).
+- **Ranking**: as 3 entidades que **mais ficaram offline** no ciclo
+  (empates resolvidos alfabeticamente por `entity_id`).
+- **Corpo**: até 3 nomes com o tempo offline entre parênteses. Se tiver 4
+  ou mais afetadas, mostra as 3 principais + `(+N)` no final.
+- **Formato do tempo**:
+  - `< 60s` → `20s`
+  - `60s a < 60min` → `10m` (minutos truncados, segundos ignorados)
+  - `≥ 60min` → `1h20m` (sem espaço; ex: `2h` quando os minutos batem certo)
 
 ### N1 — Entidade caiu (real-time)
 
 Dispara na 1ª queda do ciclo (integração em `quiet`). **Uma vez por dia**
-por integração.
+por integração. Como ninguém acumulou tempo ainda, o corpo mostra só os
+nomes.
 
 - **1 entidade**: `Luz Sala caiu.`
 - **≥2 entidades**: `Luz Sala, Tomada Cozinha, Luz Quarto caíram.`
 - **>3 entidades**: `Luz Sala, Tomada Cozinha, Luz Quarto (+2) caíram.`
 
-### N2 — Offline por X minutos (real-time)
+### N2 — Offline acumulado cruza o limiar (real-time)
 
-Dispara quando o **tempo acumulado offline** da integração no ciclo
-(**união** dos intervalos, incluindo o outage em curso) cruza o
+Dispara quando **uma entidade** da integração acumula tempo offline no
+ciclo (soma dos intervalos, incluindo o outage em curso) que cruza o
 **Limiar N2** (padrão 30 min). **Uma vez por dia** por integração — se
 voltar a cair depois, você só recebe o N3 amanhã.
 
-- **1 entidade**: `Luz Sala ficou 30 minutos offline hoje.`
-- **≥2 entidades**: `Luz Sala, Tomada Cozinha, Luz Quarto ficaram 30
-  minutos offline hoje.`
-
-O ranking do N2 usa **tempo acumulado offline** por entidade (a que mais
-ficou fora aparece primeiro).
+- **1 entidade**: `Luz Sala (30m) ficou offline hoje.`
+- **≥2 entidades**: `Luz Sala (30m), Tomada Cozinha (10m), Luz Quarto (2m)
+  ficaram offline hoje.`
 
 ### N3 — Relatório diário (`report_time_hour`)
 
 Dispara no `report_time_hour` (padrão 09:00) para cada integração que teve
 **≥1 queda** no ciclo anterior.
 
-- **1 entidade**: `Luz Sala caiu 3 vezes e ficou 47 minutos offline nas
-  últimas 24 horas.`
-- **≥2 entidades**: `Luz Sala, Tomada Cozinha, Luz Quarto caíram 7 vezes e
-  ficaram 2h 47min offline nas últimas 24 horas.`
+- **1 entidade**: `Luz Sala (2h15m) caiu 7 vezes nas últimas 24 horas.`
+- **≥2 entidades**: `Luz Sala (2h15m), Tomada Cozinha (10m), Luz Quarto
+  (2m) caíram 7 vezes nas últimas 24 horas.`
 
-A duração é a **união** de todos os intervalos offline da integração no
-ciclo (overlaps contam uma vez). Formatada como `X segundos`, `X minutos`
-ou `Xh Ymin`.
+O tempo entre parênteses é a **soma do tempo em que aquela entidade
+ficou offline** no ciclo. A frase menciona apenas o número de quedas
+(bursts) — o tempo detalhado já aparece em cada nome.
 
 ### Como o tempo é somado
 
 - Cada outage é armazenado como um intervalo `(entity_id, start, end)`.
 - Enquanto a entidade ainda está caída, `end = agora` (o tempo cresce em
   tempo real).
-- Para o "tempo offline" da **integração**, é feita a **união** entre os
-  intervalos das entidades daquela integração — se A ficou 10 min
-  sobreposto com B ficando 10 min, conta 10 min (não 20).
-- Isso vale tanto pro N2 (real-time) quanto pro N3 (relatório).
+- O tempo entre parênteses e o ranking são **por entidade**: a soma dos
+  intervalos daquela entidade no ciclo. Sobreposição com outras entidades
+  não afeta — cada uma tem o seu contador.
+- O N2 dispara quando a entidade líder do ranking cruza o limiar.
 
 ### Evento `entity_monitor_notification`
 
@@ -148,10 +149,11 @@ Cada notificação dispara o evento `entity_monitor_notification`:
 | `scope` | `entity` (1 entidade) ou `integration` (≥2). |
 | `entity_ids` | Até 3 entidades citadas, ordem = ranking. |
 | `entity_names` | Nomes amigáveis correspondentes. |
+| `entity_seconds` | Tempo offline (segundos) de cada uma, mesma ordem. |
 | `total_affected` | Nº total de entidades afetadas no ciclo. |
 | `outage_count` | Nº de quedas (bursts) no ciclo (N3). |
 | `threshold_seconds` | Limiar acionado (N2). |
-| `duration_seconds` | União do tempo offline (N2 e N3). |
+| `duration_seconds` | Tempo offline da entidade que mais ficou fora. |
 | `title`, `message` | Conteúdo final. |
 
 ## Persistência
