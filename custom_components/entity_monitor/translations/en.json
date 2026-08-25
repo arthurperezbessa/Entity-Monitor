@@ -12,6 +12,9 @@
           "seconds_threshold": "Confirm an outage after (seconds)",
           "coalesce_seconds": "Window to treat simultaneous drops as one (seconds)",
           "notify_service": "Notify service (e.g. notify.mobile_app_xxx) - optional",
+          "central_url": "Central webhook URL (Home360 Feedback Central) - optional",
+          "central_client_id": "Client id at the central (e.g. casa_silva) - optional",
+          "central_token": "Client token at the central - optional",
           "n3_minutes_threshold": "N2 offline threshold (minutes of cumulative downtime, 0 disables)",
           "report_time_hour": "Daily report hour (0-23, local time)",
           "auto_reset_days": "Auto-reset cumulative statistics every N days (0 = never)"
@@ -38,6 +41,9 @@
           "seconds_threshold": "Confirm an outage after (seconds)",
           "coalesce_seconds": "Window to treat simultaneous drops as one (seconds)",
           "notify_service": "Notify service (e.g. notify.mobile_app_xxx) - optional",
+          "central_url": "Central webhook URL (Home360 Feedback Central) - optional",
+          "central_client_id": "Client id at the central (e.g. casa_silva) - optional",
+          "central_token": "Client token at the central - optional",
           "n3_minutes_threshold": "N2 offline threshold (minutes of cumulative downtime, 0 disables)",
           "report_time_hour": "Daily report hour (0-23, local time)",
           "auto_reset_days": "Auto-reset cumulative statistics every N days (0 = never)"

@@ -7,10 +7,13 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from functools import partial
 
+import aiohttp
+
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import STATE_UNAVAILABLE
 from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import (
     async_call_later,
@@ -21,7 +24,12 @@ from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    CENTRAL_SEND_TIMEOUT,
+    CENTRAL_TOKEN_HEADER,
     CONF_AUTO_RESET_DAYS,
+    CONF_CENTRAL_CLIENT_ID,
+    CONF_CENTRAL_TOKEN,
+    CONF_CENTRAL_URL,
     CONF_COALESCE_SECONDS,
     CONF_ENTITIES,
     CONF_EXCLUDED_ENTITIES,
@@ -45,11 +53,13 @@ from .const import (
     NOTIFY_N1,
     NOTIFY_N2,
     NOTIFY_N3,
+    NOTIFY_SNAPSHOT,
     NOTIFY_TEST,
     PRIMARY_DOMAIN_ORDER,
     SCOPE_ENTITY,
     SCOPE_INTEGRATION,
     SIGNAL_UPDATE,
+    SNAPSHOT_DELAY_SECONDS,
     STATE_ACTIVE_TODAY,
     STATE_QUIET,
     STORAGE_VERSION,
@@ -297,6 +307,7 @@ class EntityMonitor:
         self._integration_names: dict[str, str] = {}
         self._last_reset_at: datetime | None = None
         self._auto_reset_cancel: CALLBACK_TYPE | None = None
+        self._snapshot_cancel: CALLBACK_TYPE | None = None
         self._unsub_report_tick: CALLBACK_TYPE | None = None
         self._store: Store = Store(
             hass, STORAGE_VERSION, f"{DOMAIN}.{entry.entry_id}"
@@ -359,6 +370,25 @@ class EntityMonitor:
     @property
     def notify_service(self) -> str:
         return str(self.entry.options.get(CONF_NOTIFY_SERVICE, "")).strip()
+
+    @property
+    def central_url(self) -> str:
+        return str(self.entry.options.get(CONF_CENTRAL_URL, "")).strip()
+
+    @property
+    def central_client_id(self) -> str:
+        return str(self.entry.options.get(CONF_CENTRAL_CLIENT_ID, "")).strip()
+
+    @property
+    def central_token(self) -> str:
+        return str(self.entry.options.get(CONF_CENTRAL_TOKEN, "")).strip()
+
+    @property
+    def central_enabled(self) -> bool:
+        """True quando URL, client_id e token do central estão preenchidos."""
+        return bool(
+            self.central_url and self.central_client_id and self.central_token
+        )
 
     @property
     def auto_reset_days(self) -> int:
@@ -450,6 +480,13 @@ class EntityMonitor:
         self._schedule_report_tick()
         self._store.async_delay_save(self._data_for_storage, 5)
 
+        # Snapshot do estado atual para o central (após um atraso, para não
+        # reportar entidades que ainda estão carregando no boot).
+        if self.central_enabled:
+            self._snapshot_cancel = async_call_later(
+                self.hass, SNAPSHOT_DELAY_SECONDS, self._send_snapshot_to_central
+            )
+
     def _resolved_entities(self) -> list[str]:
         explicit = self.entities
         integrations = set(self.integrations)
@@ -537,6 +574,9 @@ class EntityMonitor:
         if self._auto_reset_cancel is not None:
             self._auto_reset_cancel()
             self._auto_reset_cancel = None
+        if self._snapshot_cancel is not None:
+            self._snapshot_cancel()
+            self._snapshot_cancel = None
 
     # -- State change handling -------------------------------------------------
 
@@ -1063,6 +1103,18 @@ class EntityMonitor:
             },
         )
         self._send_notification(title, message)
+        self._send_to_central(
+            kind=kind,
+            integration=integration,
+            integration_name=integration_name,
+            entity_names=top_names,
+            entity_seconds=[round(s, 1) for s in top_seconds],
+            total_affected=total_affected,
+            outage_count=outage_count,
+            threshold_seconds=threshold_seconds,
+            title=title,
+            message=message,
+        )
         _LOGGER.info(
             "Entity Monitor notification (%s/%s): %s", kind, scope, message
         )
@@ -1148,6 +1200,18 @@ class EntityMonitor:
                 "test": True,
             },
         )
+        self._send_to_central(
+            kind=NOTIFY_TEST,
+            integration="_test_",
+            integration_name="Entity Monitor",
+            entity_names=[],
+            entity_seconds=[],
+            total_affected=0,
+            outage_count=0,
+            threshold_seconds=0,
+            title=title,
+            message=message,
+        )
         if not self.notify_service:
             _LOGGER.warning(
                 "Test notification requested but no notify_service is "
@@ -1175,6 +1239,92 @@ class EntityMonitor:
                 blocking=False,
             )
         )
+
+    # -- Central (Home360 Feedback Central) ------------------------------------
+
+    @callback
+    def _send_to_central(
+        self,
+        *,
+        kind: str,
+        integration: str,
+        integration_name: str,
+        entity_names: list[str],
+        entity_seconds: list[float],
+        total_affected: int,
+        outage_count: int,
+        threshold_seconds: int,
+        title: str,
+        message: str,
+    ) -> None:
+        """Envia o alerta ao HA central, se configurado."""
+        if not self.central_enabled:
+            return
+        payload = {
+            "tipo": "monitor",
+            "client_id": self.central_client_id,
+            "token": self.central_token,
+            "kind": kind,
+            "integracao": integration_name,
+            "integracao_slug": integration,
+            "entidades": entity_names,
+            "entidades_segundos": entity_seconds,
+            "total_afetadas": total_affected,
+            "quedas": outage_count,
+            "limiar_segundos": threshold_seconds,
+            "titulo": title,
+            "mensagem": message,
+        }
+        self.hass.async_create_task(self._async_send_to_central(payload))
+
+    async def _async_send_to_central(self, payload: dict) -> None:
+        """POST do alerta para o webhook do central."""
+        session = async_get_clientsession(self.hass)
+        headers = {CENTRAL_TOKEN_HEADER: self.central_token}
+        timeout = aiohttp.ClientTimeout(total=CENTRAL_SEND_TIMEOUT)
+        try:
+            async with session.post(
+                self.central_url, json=payload, headers=headers, timeout=timeout
+            ) as resp:
+                if resp.status >= 400:
+                    _LOGGER.warning(
+                        "Entity Monitor: central respondeu HTTP %s", resp.status
+                    )
+        except Exception as err:  # noqa: BLE001 - logar qualquer falha de rede
+            _LOGGER.warning(
+                "Entity Monitor: falha ao enviar ao central: %s", err
+            )
+
+    @callback
+    def _send_snapshot_to_central(self, _now: datetime | None = None) -> None:
+        """Envia o estado atual (entidades caídas agora) ao central.
+
+        Agrupado por integração, um alerta kind="snapshot" por integração.
+        """
+        self._snapshot_cancel = None
+        if not self.central_enabled or not self._ongoing:
+            return
+        by_integration: dict[str, list[str]] = {}
+        for eid in self._ongoing:
+            by_integration.setdefault(self._integration_of(eid), []).append(eid)
+        for integration, eids in by_integration.items():
+            names = [self._friendly_name(eid) for eid in sorted(eids)]
+            top = names[:3]
+            extra = len(names) - len(top)
+            subject = ", ".join(top) + (f" (+{extra})" if extra > 0 else "")
+            verb = "estão" if len(names) > 1 else "está"
+            self._send_to_central(
+                kind=NOTIFY_SNAPSHOT,
+                integration=integration,
+                integration_name=self._integration_name(integration),
+                entity_names=top,
+                entity_seconds=[],
+                total_affected=len(names),
+                outage_count=0,
+                threshold_seconds=0,
+                title=f"{self._integration_name(integration)} instável",
+                message=f"{subject} {verb} offline agora.",
+            )
 
     # -- Statistics / reporting ------------------------------------------------
 
