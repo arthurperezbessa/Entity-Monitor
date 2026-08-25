@@ -28,6 +28,9 @@ from homeassistant.helpers.selector import (
 
 from .const import (
     CONF_AUTO_RESET_DAYS,
+    CONF_CENTRAL_CLIENT_ID,
+    CONF_CENTRAL_TOKEN,
+    CONF_CENTRAL_URL,
     CONF_COALESCE_SECONDS,
     CONF_ENTITIES,
     CONF_EXCLUDED_ENTITIES,
@@ -118,6 +121,18 @@ def _build_schema(
                 CONF_NOTIFY_SERVICE,
                 default=defaults.get(CONF_NOTIFY_SERVICE, ""),
             ): TextSelector(),
+            vol.Optional(
+                CONF_CENTRAL_URL,
+                default=defaults.get(CONF_CENTRAL_URL, ""),
+            ): TextSelector(),
+            vol.Optional(
+                CONF_CENTRAL_CLIENT_ID,
+                default=defaults.get(CONF_CENTRAL_CLIENT_ID, ""),
+            ): TextSelector(),
+            vol.Optional(
+                CONF_CENTRAL_TOKEN,
+                default=defaults.get(CONF_CENTRAL_TOKEN, ""),
+            ): TextSelector(),
             vol.Required(
                 CONF_N3_MINUTES_THRESHOLD,
                 default=defaults.get(
@@ -177,6 +192,11 @@ def _normalise(user_input: dict[str, Any]) -> dict[str, Any]:
         CONF_SECONDS_THRESHOLD: int(user_input[CONF_SECONDS_THRESHOLD]),
         CONF_COALESCE_SECONDS: int(user_input[CONF_COALESCE_SECONDS]),
         CONF_NOTIFY_SERVICE: user_input.get(CONF_NOTIFY_SERVICE, "").strip(),
+        CONF_CENTRAL_URL: user_input.get(CONF_CENTRAL_URL, "").strip(),
+        CONF_CENTRAL_CLIENT_ID: user_input.get(
+            CONF_CENTRAL_CLIENT_ID, ""
+        ).strip(),
+        CONF_CENTRAL_TOKEN: user_input.get(CONF_CENTRAL_TOKEN, "").strip(),
         CONF_N3_MINUTES_THRESHOLD: int(
             user_input[CONF_N3_MINUTES_THRESHOLD]
         ),

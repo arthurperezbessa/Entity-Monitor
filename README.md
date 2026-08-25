@@ -156,6 +156,25 @@ Cada notificação dispara o evento `entity_monitor_notification`:
 | `duration_seconds` | Tempo offline da entidade que mais ficou fora. |
 | `title`, `message` | Conteúdo final. |
 
+## Enviar para o HA central (Home360 Feedback Central)
+
+Além (ou no lugar) da notificação no celular, o Entity Monitor pode **enviar os
+alertas N1/N2/N3 para um HA central**, onde eles viram um dashboard por cliente —
+em vez de lotar o celular de notificações.
+
+Basta preencher, na configuração:
+
+- **`central_url`** — a URL do webhook do central (a mesma da integração
+  [Home360 Feedback Central](https://github.com/arthurperezbessa/Home-Assistant-Feedback-Central)).
+- **`central_client_id`** — a identificação daquele cliente no central.
+- **`central_token`** — o token daquele cliente no central.
+
+Quando os três estão preenchidos, cada N1/N2/N3 (e o teste) faz um `POST` para o
+central com `tipo: "monitor"`, o `kind` (n1/n2/n3), a integração afetada, as
+entidades e a mensagem. O central valida o token e mostra num sensor de
+monitoramento por cliente. O `notify_service` continua **opcional** — deixe em
+branco se quiser só o central.
+
 ## Persistência
 
 Tudo é salvo em disco:
@@ -215,5 +234,8 @@ para receber inline). Retorna ranking por entidade e por integração.
 | `coalesce_seconds` | `20` | Janela de quedas simultâneas |
 | `n3_minutes_threshold` | `30` | Limiar N2 de offline acumulado (0 desliga N2) |
 | `report_time_hour` | `9` | Hora local do relatório diário (0-23) |
-| `notify_service` | — | Serviço `notify.*` |
+| `notify_service` | — | Serviço `notify.*` (opcional) |
+| `central_url` | — | URL do webhook do HA central (opcional) |
+| `central_client_id` | — | Identificação do cliente no central (opcional) |
+| `central_token` | — | Token do cliente no central (opcional) |
 | `auto_reset_days` | `30` | Reset auto de estatísticas cumulativas (`0` desliga) |

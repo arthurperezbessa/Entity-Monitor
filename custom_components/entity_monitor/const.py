@@ -17,6 +17,13 @@ CONF_REPORT_TIME_HOUR = "report_time_hour"
 CONF_NOTIFY_SERVICE = "notify_service"
 CONF_AUTO_RESET_DAYS = "auto_reset_days"
 
+# Envio para o HA central (Home360 Feedback Central) — opcional.
+CONF_CENTRAL_URL = "central_url"
+CONF_CENTRAL_CLIENT_ID = "central_client_id"
+CONF_CENTRAL_TOKEN = "central_token"
+CENTRAL_TOKEN_HEADER = "X-Home360-Token"
+CENTRAL_SEND_TIMEOUT = 15
+
 # Defaults
 DEFAULT_NAME = "Entity Monitor"
 DEFAULT_SECONDS_THRESHOLD = 30
