@@ -175,6 +175,12 @@ entidades e a mensagem. O central valida o token e mostra num sensor de
 monitoramento por cliente. O `notify_service` continua **opcional** — deixe em
 branco se quiser só o central.
 
+**Snapshot no início:** ~60s após o Entity Monitor iniciar, ele envia ao central
+um `kind: "snapshot"` com as entidades que estão **offline naquele momento**
+(agrupadas por integração). Assim o dashboard do central já nasce mostrando o que
+está caído, sem esperar o próximo alerta. O atraso evita reportar entidades que
+ainda estavam carregando no boot.
+
 ## Persistência
 
 Tudo é salvo em disco:

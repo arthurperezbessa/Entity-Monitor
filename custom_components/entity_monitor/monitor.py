@@ -53,11 +53,13 @@ from .const import (
     NOTIFY_N1,
     NOTIFY_N2,
     NOTIFY_N3,
+    NOTIFY_SNAPSHOT,
     NOTIFY_TEST,
     PRIMARY_DOMAIN_ORDER,
     SCOPE_ENTITY,
     SCOPE_INTEGRATION,
     SIGNAL_UPDATE,
+    SNAPSHOT_DELAY_SECONDS,
     STATE_ACTIVE_TODAY,
     STATE_QUIET,
     STORAGE_VERSION,
@@ -305,6 +307,7 @@ class EntityMonitor:
         self._integration_names: dict[str, str] = {}
         self._last_reset_at: datetime | None = None
         self._auto_reset_cancel: CALLBACK_TYPE | None = None
+        self._snapshot_cancel: CALLBACK_TYPE | None = None
         self._unsub_report_tick: CALLBACK_TYPE | None = None
         self._store: Store = Store(
             hass, STORAGE_VERSION, f"{DOMAIN}.{entry.entry_id}"
@@ -477,6 +480,13 @@ class EntityMonitor:
         self._schedule_report_tick()
         self._store.async_delay_save(self._data_for_storage, 5)
 
+        # Snapshot do estado atual para o central (após um atraso, para não
+        # reportar entidades que ainda estão carregando no boot).
+        if self.central_enabled:
+            self._snapshot_cancel = async_call_later(
+                self.hass, SNAPSHOT_DELAY_SECONDS, self._send_snapshot_to_central
+            )
+
     def _resolved_entities(self) -> list[str]:
         explicit = self.entities
         integrations = set(self.integrations)
@@ -564,6 +574,9 @@ class EntityMonitor:
         if self._auto_reset_cancel is not None:
             self._auto_reset_cancel()
             self._auto_reset_cancel = None
+        if self._snapshot_cancel is not None:
+            self._snapshot_cancel()
+            self._snapshot_cancel = None
 
     # -- State change handling -------------------------------------------------
 
@@ -1280,6 +1293,37 @@ class EntityMonitor:
         except Exception as err:  # noqa: BLE001 - logar qualquer falha de rede
             _LOGGER.warning(
                 "Entity Monitor: falha ao enviar ao central: %s", err
+            )
+
+    @callback
+    def _send_snapshot_to_central(self, _now: datetime | None = None) -> None:
+        """Envia o estado atual (entidades caídas agora) ao central.
+
+        Agrupado por integração, um alerta kind="snapshot" por integração.
+        """
+        self._snapshot_cancel = None
+        if not self.central_enabled or not self._ongoing:
+            return
+        by_integration: dict[str, list[str]] = {}
+        for eid in self._ongoing:
+            by_integration.setdefault(self._integration_of(eid), []).append(eid)
+        for integration, eids in by_integration.items():
+            names = [self._friendly_name(eid) for eid in sorted(eids)]
+            top = names[:3]
+            extra = len(names) - len(top)
+            subject = ", ".join(top) + (f" (+{extra})" if extra > 0 else "")
+            verb = "estão" if len(names) > 1 else "está"
+            self._send_to_central(
+                kind=NOTIFY_SNAPSHOT,
+                integration=integration,
+                integration_name=self._integration_name(integration),
+                entity_names=top,
+                entity_seconds=[],
+                total_affected=len(names),
+                outage_count=0,
+                threshold_seconds=0,
+                title=f"{self._integration_name(integration)} instável",
+                message=f"{subject} {verb} offline agora.",
             )
 
     # -- Statistics / reporting ------------------------------------------------
