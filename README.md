@@ -88,10 +88,15 @@ integração que teve quedas, e os contadores/flags do dia (`N1 disparou?`,
   (empates resolvidos alfabeticamente por `entity_id`).
 - **Corpo**: até 3 nomes com o tempo offline entre parênteses. Se tiver 4
   ou mais afetadas, mostra as 3 principais + `(+N)` no final.
-- **Formato do tempo**:
+- **Formato do tempo** (nas notificações):
   - `< 60s` → `20s`
   - `60s a < 60min` → `10m` (minutos truncados, segundos ignorados)
-  - `≥ 60min` → `1h20m` (sem espaço; ex: `2h` quando os minutos batem certo)
+  - `≥ 60min` → **hora cheia arredondada**: ≤30min desce, ≥31min sobe.
+    Ex.: `2h30m` → `2h`; `2h35m` → `3h`.
+- **Tempo real (não por ciclo)**: para entidades que **ainda estão caídas**, o
+  tempo mostrado é o **contínuo desde a queda real** (atravessa o reset diário e
+  reinícios do HA), não o do ciclo do dia. Entidades já recuperadas usam o tempo
+  do ciclo. O relatório/sensor (`downtime_report`) mantém o tempo técnico detalhado.
 
 ### N1 — Entidade caiu (real-time)
 

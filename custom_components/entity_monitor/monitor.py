@@ -87,9 +87,10 @@ def format_duration_pt(seconds: float) -> str:
     """Return a compact duration for notification bodies.
 
     Format:
-    - `< 60s`  →  `Xs`
+    - `< 60s`   →  `Xs`
     - `< 3600s` →  `Xm`  (minutes truncated, seconds dropped)
-    - `>= 3600s` →  `XhYm` (or just `Xh` when minutes = 0)
+    - `>= 3600s` →  `Xh`  (arredondado para hora cheia: <=30min desce,
+      >=31min sobe; ex.: 2h30 -> 2h, 2h35 -> 3h)
     """
     total = int(seconds)
     if total <= 0:
@@ -99,10 +100,8 @@ def format_duration_pt(seconds: float) -> str:
     minutes = total // 60
     if minutes < 60:
         return f"{minutes}m"
-    hours = minutes // 60
-    remaining_minutes = minutes % 60
-    if remaining_minutes:
-        return f"{hours}h{remaining_minutes}m"
+    # Arredonda para hora cheia: +29 faz o corte cair em 31min (>=31 sobe).
+    hours = (minutes + 29) // 60
     return f"{hours}h"
 
 
@@ -1064,6 +1063,18 @@ class EntityMonitor:
         outage_count: int = 0,
         threshold_seconds: int = 0,
     ) -> None:
+        # Para entidades ainda caídas, mostrar o tempo real contínuo desde a
+        # queda (não o do ciclo diário, que zera às 09:00 e causava o "30m").
+        if per_entity_seconds is not None:
+            now = dt_util.utcnow()
+            per_entity_seconds = dict(per_entity_seconds)
+            for eid in ranked_entity_ids:
+                outage = self._ongoing.get(eid)
+                if outage is not None:
+                    per_entity_seconds[eid] = (
+                        now - outage.started
+                    ).total_seconds()
+
         integration_name = self._integration_name(integration)
         total_affected = len(ranked_entity_ids)
         top_ids = ranked_entity_ids[:3]
@@ -1304,22 +1315,32 @@ class EntityMonitor:
         self._snapshot_cancel = None
         if not self.central_enabled or not self._ongoing:
             return
+        now = dt_util.utcnow()
         by_integration: dict[str, list[str]] = {}
         for eid in self._ongoing:
             by_integration.setdefault(self._integration_of(eid), []).append(eid)
         for integration, eids in by_integration.items():
-            names = [self._friendly_name(eid) for eid in sorted(eids)]
-            top = names[:3]
-            extra = len(names) - len(top)
-            subject = ", ".join(top) + (f" (+{extra})" if extra > 0 else "")
-            verb = "estão" if len(names) > 1 else "está"
+            eids_sorted = sorted(eids)
+            top_ids = eids_sorted[:3]
+            top_seconds = [
+                (now - self._ongoing[eid].started).total_seconds()
+                for eid in top_ids
+            ]
+            # "Nome (52h)" com o tempo real contínuo desde a queda.
+            labels = [
+                f"{self._friendly_name(eid)} ({format_duration_pt(sec)})"
+                for eid, sec in zip(top_ids, top_seconds)
+            ]
+            extra = len(eids_sorted) - len(labels)
+            subject = ", ".join(labels) + (f" (+{extra})" if extra > 0 else "")
+            verb = "estão" if len(eids_sorted) > 1 else "está"
             self._send_to_central(
                 kind=NOTIFY_SNAPSHOT,
                 integration=integration,
                 integration_name=self._integration_name(integration),
-                entity_names=top,
-                entity_seconds=[],
-                total_affected=len(names),
+                entity_names=[self._friendly_name(eid) for eid in top_ids],
+                entity_seconds=[round(s, 1) for s in top_seconds],
+                total_affected=len(eids_sorted),
                 outage_count=0,
                 threshold_seconds=0,
                 title=f"{self._integration_name(integration)} instável",
