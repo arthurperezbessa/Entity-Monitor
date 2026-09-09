@@ -75,6 +75,14 @@ NOTIFY_SNAPSHOT = "snapshot"  # estado atual enviado ao central no boot
 # entidades carregarem no boot e não reportar quedas transitórias.
 SNAPSHOT_DELAY_SECONDS = 60
 
+# Carência (segundos) após o boot do HA: quedas que se recuperam nesse período
+# são transientes de reinício — não contam como queda nem como flicker.
+RESTART_GRACE_SECONDS = 60
+
+# Retenção (dias) do histórico de quedas usado para as janelas dia/semana.
+# Precisa cobrir a janela de 7 dias com uma folga.
+HISTORY_RETENTION_DAYS = 9
+
 # Notification scope (number of entities involved)
 SCOPE_ENTITY = "entity"  # exactly one
 SCOPE_INTEGRATION = "integration"  # two or more

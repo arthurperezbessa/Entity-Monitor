@@ -46,6 +46,7 @@ from .const import (
     DEFAULT_REPORT_TIME_HOUR,
     DEFAULT_SECONDS_THRESHOLD,
     DOMAIN,
+    HISTORY_RETENTION_DAYS,
     EVENT_NOTIFICATION,
     EVENT_RECOVERED,
     EVENT_UNAVAILABLE,
@@ -56,6 +57,7 @@ from .const import (
     NOTIFY_SNAPSHOT,
     NOTIFY_TEST,
     PRIMARY_DOMAIN_ORDER,
+    RESTART_GRACE_SECONDS,
     SCOPE_ENTITY,
     SCOPE_INTEGRATION,
     SIGNAL_UPDATE,
@@ -119,13 +121,22 @@ def _iso(value: datetime | None) -> str | None:
 
 @dataclass
 class EntityStats:
-    """Persisted outage statistics for a single entity."""
+    """Persisted outage statistics for a single entity.
+
+    Contadores cumulativos (all-time) para quedas reais e para flickers, mais
+    um histórico recente ({end, dur, flicker}) usado para as janelas de tempo
+    (dia anterior / semana anterior). Quedas reais e flickers são separados.
+    """
 
     outage_count: int = 0
     total_downtime: float = 0.0
     longest_outage: float = 0.0
     last_outage_start: str | None = None
     last_outage_end: str | None = None
+    flicker_count: int = 0
+    flicker_downtime: float = 0.0
+    # Cada registro: {"end": iso, "dur": float, "flicker": bool}
+    history: list[dict] = field(default_factory=list)
 
     def as_dict(self) -> dict:
         return {
@@ -134,6 +145,9 @@ class EntityStats:
             "longest_outage": self.longest_outage,
             "last_outage_start": self.last_outage_start,
             "last_outage_end": self.last_outage_end,
+            "flicker_count": self.flicker_count,
+            "flicker_downtime": self.flicker_downtime,
+            "history": list(self.history),
         }
 
     @classmethod
@@ -144,7 +158,40 @@ class EntityStats:
             longest_outage=data.get("longest_outage", 0.0),
             last_outage_start=data.get("last_outage_start"),
             last_outage_end=data.get("last_outage_end"),
+            flicker_count=data.get("flicker_count", 0),
+            flicker_downtime=data.get("flicker_downtime", 0.0),
+            history=list(data.get("history", [])),
         )
+
+    def window(self, since: datetime, until: datetime) -> dict:
+        """Agrega o histórico no intervalo [since, until).
+
+        Conta quedas reais e flickers (contagem + downtime) que terminaram
+        dentro da janela.
+        """
+        since_ts = since.timestamp()
+        until_ts = until.timestamp()
+        oc = fc = 0
+        od = fd = 0.0
+        for rec in self.history:
+            end = _parse_dt(rec.get("end"))
+            if end is None:
+                continue
+            ts = end.timestamp()
+            if ts < since_ts or ts >= until_ts:
+                continue
+            if rec.get("flicker"):
+                fc += 1
+                fd += float(rec.get("dur", 0.0))
+            else:
+                oc += 1
+                od += float(rec.get("dur", 0.0))
+        return {
+            "outages": oc,
+            "outage_downtime": od,
+            "flickers": fc,
+            "flicker_downtime": fd,
+        }
 
 
 @dataclass
@@ -307,6 +354,8 @@ class EntityMonitor:
         self._last_reset_at: datetime | None = None
         self._auto_reset_cancel: CALLBACK_TYPE | None = None
         self._snapshot_cancel: CALLBACK_TYPE | None = None
+        # Até quando quedas contam como transiente de reinício (não contadas).
+        self._grace_until: datetime | None = None
         self._unsub_report_tick: CALLBACK_TYPE | None = None
         self._store: Store = Store(
             hass, STORAGE_VERSION, f"{DOMAIN}.{entry.entry_id}"
@@ -448,6 +497,12 @@ class EntityMonitor:
                     self._stored_outage_starts[entity_id] = started
 
     async def async_start(self) -> None:
+        # Carência de reinício: quedas que se recuperarem nos próximos segundos
+        # são transientes de boot e não são contabilizadas.
+        self._grace_until = dt_util.utcnow() + timedelta(
+            seconds=RESTART_GRACE_SECONDS
+        )
+
         entities = self._resolved_entities()
         for eid in entities:
             self.stats.setdefault(eid, EntityStats())
@@ -687,16 +742,43 @@ class EntityMonitor:
 
         now = dt_util.utcnow()
         duration = (now - outage.started).total_seconds()
+        integration = self._integration_of(entity_id)
+
+        # 1) Transiente de reinício do HA: dentro da carência de boot, não
+        #    conta (nem queda, nem flicker). Descarta o intervalo do ciclo.
+        if self._grace_until is not None and now <= self._grace_until:
+            self._drop_cycle_interval(integration, entity_id)
+            self._close_integration_burst(integration, entity_id, now)
+            _LOGGER.debug(
+                "%s recovered during startup grace — ignored", entity_id
+            )
+            self._reevaluate_n2_timer(integration)
+            self._store.async_delay_save(self._data_for_storage, 5)
+            async_dispatcher_send(self.hass, SIGNAL_UPDATE)
+            return
+
+        # 2) Flicker: recuperou antes do seconds_threshold. Conta separado e
+        #    NÃO entra no ciclo (não infla N2/N3 nem o downtime real).
+        flicker = duration < self.seconds_threshold
 
         stats = self.stats.setdefault(entity_id, EntityStats())
-        stats.outage_count += 1
-        stats.total_downtime += duration
-        stats.longest_outage = max(stats.longest_outage, duration)
-        stats.last_outage_start = outage.started.isoformat()
-        stats.last_outage_end = now.isoformat()
+        if flicker:
+            stats.flicker_count += 1
+            stats.flicker_downtime += duration
+            self._drop_cycle_interval(integration, entity_id)
+        else:
+            stats.outage_count += 1
+            stats.total_downtime += duration
+            stats.longest_outage = max(stats.longest_outage, duration)
+            stats.last_outage_start = outage.started.isoformat()
+            stats.last_outage_end = now.isoformat()
+            self._close_cycle_interval(integration, entity_id, now)
 
-        integration = self._integration_of(entity_id)
-        self._close_cycle_interval(integration, entity_id, now)
+        stats.history.append(
+            {"end": now.isoformat(), "dur": round(duration, 1), "flicker": flicker}
+        )
+        self._prune_history(stats, now)
+
         self._close_integration_burst(integration, entity_id, now)
 
         self.hass.bus.async_fire(
@@ -707,17 +789,44 @@ class EntityMonitor:
                 "integration": integration,
                 "duration_seconds": round(duration, 1),
                 "duration": format_duration(duration),
+                "flicker": flicker,
                 "outage_count": stats.outage_count,
+                "flicker_count": stats.flicker_count,
             },
         )
         _LOGGER.info(
-            "%s recovered after %s", entity_id, format_duration(duration)
+            "%s recovered after %s%s",
+            entity_id,
+            format_duration(duration),
+            " (flicker)" if flicker else "",
         )
         # The union stopped growing — usually just cancels the pending N2
         # timer if this was the last open interval.
         self._reevaluate_n2_timer(integration)
         self._store.async_delay_save(self._data_for_storage, 5)
         async_dispatcher_send(self.hass, SIGNAL_UPDATE)
+
+    @callback
+    def _drop_cycle_interval(self, integration: str, entity_id: str) -> None:
+        """Remove o intervalo aberto do ciclo (flicker/transiente não contam)."""
+        state = self._integration_state.get(integration)
+        if state is None:
+            return
+        for i in range(len(state.cycle_intervals) - 1, -1, -1):
+            iv = state.cycle_intervals[i]
+            if iv.entity_id == entity_id and iv.end is None:
+                del state.cycle_intervals[i]
+                return
+
+    @staticmethod
+    def _prune_history(stats: EntityStats, now: datetime) -> None:
+        """Descarta registros de histórico além da retenção."""
+        cutoff = (now - timedelta(days=HISTORY_RETENTION_DAYS)).timestamp()
+        stats.history = [
+            rec
+            for rec in stats.history
+            if (_parse_dt(rec.get("end")) or now).timestamp() >= cutoff
+        ]
 
     # -- Burst tracking --------------------------------------------------------
 
@@ -1094,6 +1203,27 @@ class EntityMonitor:
             outage_count=outage_count,
             show_times=per_entity_seconds is not None,
         )
+
+        # N3 (relatório diário): mensagem detalhada por entidade, com as janelas
+        # dia anterior / últimos 7 dias / total, e os flickers separados.
+        entity_windows: list[dict] = []
+        if kind == NOTIFY_N3:
+            linhas: list[str] = []
+            for eid, name in zip(top_ids, top_names):
+                stats = self.stats.get(eid)
+                if stats is None:
+                    continue
+                win = self.entity_windows(stats)
+                entity_windows.append(
+                    {"entity_id": eid, "name": name, "windows": win}
+                )
+                linhas.append(self._format_windows_line(name, win))
+            extra = total_affected - len(top_ids)
+            if extra > 0:
+                linhas.append(f"(+{extra} entidades)")
+            if linhas:
+                message = f"{integration_name}\n" + "\n".join(linhas)
+
         duration_seconds = top_seconds[0] if top_seconds else 0.0
         self.hass.bus.async_fire(
             EVENT_NOTIFICATION,
@@ -1109,6 +1239,7 @@ class EntityMonitor:
                 "outage_count": outage_count,
                 "threshold_seconds": threshold_seconds,
                 "duration_seconds": round(duration_seconds, 1),
+                "entity_windows": entity_windows,
                 "title": title,
                 "message": message,
             },
@@ -1125,6 +1256,7 @@ class EntityMonitor:
             threshold_seconds=threshold_seconds,
             title=title,
             message=message,
+            windows=entity_windows or None,
         )
         _LOGGER.info(
             "Entity Monitor notification (%s/%s): %s", kind, scope, message
@@ -1184,6 +1316,32 @@ class EntityMonitor:
         if extra > 0:
             return f"{joined} (+{extra})"
         return joined
+
+    @staticmethod
+    def _format_windows_line(name: str, windows: dict) -> str:
+        """Linha por entidade: quedas por janela + flickers separados.
+
+        Ex.: "🔴 Luz Sala — quedas: ontem 2× (1h), 7d 5× (3h), total 40× (12h)
+              · ⚡ flickers: ontem 3, 7d 8, total 20"
+        """
+
+        def seg(win: dict) -> str:
+            return (
+                f"{win['outages']}× "
+                f"({format_duration_pt(win['outage_downtime'])})"
+            )
+
+        d = windows["dia"]
+        w = windows["semana"]
+        t = windows["total"]
+        quedas = (
+            f"quedas: ontem {seg(d)}, 7d {seg(w)}, total {seg(t)}"
+        )
+        flickers = (
+            f"⚡ flickers: ontem {d['flickers']}, "
+            f"7d {w['flickers']}, total {t['flickers']}"
+        )
+        return f"🔴 {name} — {quedas} · {flickers}"
 
     @callback
     def async_send_test_notification(self) -> bool:
@@ -1267,6 +1425,7 @@ class EntityMonitor:
         threshold_seconds: int,
         title: str,
         message: str,
+        windows: list[dict] | None = None,
     ) -> None:
         """Envia o alerta ao HA central, se configurado."""
         if not self.central_enabled:
@@ -1286,6 +1445,8 @@ class EntityMonitor:
             "titulo": title,
             "mensagem": message,
         }
+        if windows:
+            payload["entidades_janelas"] = windows
         self.hass.async_create_task(self._async_send_to_central(payload))
 
     async def _async_send_to_central(self, payload: dict) -> None:
@@ -1415,6 +1576,32 @@ class EntityMonitor:
         )
         self.async_reset_statistics()
 
+    def _cycle_boundary(self, now_local: datetime) -> datetime:
+        """Início do ciclo atual (último report_time_hour local <= agora)."""
+        boundary = now_local.replace(
+            hour=self.report_time_hour, minute=0, second=0, microsecond=0
+        )
+        if boundary > now_local:
+            boundary -= timedelta(days=1)
+        return boundary
+
+    def entity_windows(self, stats: EntityStats) -> dict:
+        """Resumo por janela: dia anterior, últimos 7 dias e total (all-time).
+
+        Cada janela traz quedas reais e flickers (contagem + downtime em s).
+        """
+        boundary = self._cycle_boundary(dt_util.now())
+        return {
+            "dia": stats.window(boundary - timedelta(days=1), boundary),
+            "semana": stats.window(boundary - timedelta(days=7), boundary),
+            "total": {
+                "outages": stats.outage_count,
+                "outage_downtime": round(stats.total_downtime, 1),
+                "flickers": stats.flicker_count,
+                "flicker_downtime": round(stats.flicker_downtime, 1),
+            },
+        }
+
     def build_report(self) -> dict:
         now = dt_util.utcnow()
         by_entity: list[dict] = []
@@ -1432,6 +1619,8 @@ class EntityMonitor:
                     "outage_count": stats.outage_count,
                     "total_downtime_seconds": round(stats.total_downtime, 1),
                     "total_downtime": format_duration(stats.total_downtime),
+                    "flicker_count": stats.flicker_count,
+                    "flicker_downtime_seconds": round(stats.flicker_downtime, 1),
                     "longest_outage_seconds": round(stats.longest_outage, 1),
                     "longest_outage": format_duration(stats.longest_outage),
                     "currently_unavailable": ongoing is not None,
@@ -1439,6 +1628,7 @@ class EntityMonitor:
                         format_duration(current) if ongoing else None
                     ),
                     "last_outage_end": stats.last_outage_end,
+                    "windows": self.entity_windows(stats),
                 }
             )
 
