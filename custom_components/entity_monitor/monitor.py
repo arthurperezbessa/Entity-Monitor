@@ -1207,7 +1207,10 @@ class EntityMonitor:
         # N3 (relatório diário): mensagem detalhada por entidade, com as janelas
         # dia anterior / últimos 7 dias / total, e os flickers separados.
         entity_windows: list[dict] = []
+        integration_windows: dict | None = None
         if kind == NOTIFY_N3:
+            # Agregado da integração (soma de TODAS as entidades afetadas).
+            integration_windows = self.aggregate_windows(ranked_entity_ids)
             linhas: list[str] = []
             for eid, name in zip(top_ids, top_names):
                 stats = self.stats.get(eid)
@@ -1257,6 +1260,7 @@ class EntityMonitor:
             title=title,
             message=message,
             windows=entity_windows or None,
+            integration_windows=integration_windows,
         )
         _LOGGER.info(
             "Entity Monitor notification (%s/%s): %s", kind, scope, message
@@ -1423,6 +1427,7 @@ class EntityMonitor:
         title: str,
         message: str,
         windows: list[dict] | None = None,
+        integration_windows: dict | None = None,
     ) -> None:
         """Envia o alerta ao HA central, se configurado."""
         if not self.central_enabled:
@@ -1444,6 +1449,8 @@ class EntityMonitor:
         }
         if windows:
             payload["entidades_janelas"] = windows
+        if integration_windows:
+            payload["janela_integracao"] = integration_windows
         self.hass.async_create_task(self._async_send_to_central(payload))
 
     async def _async_send_to_central(self, payload: dict) -> None:
@@ -1582,28 +1589,29 @@ class EntityMonitor:
             boundary -= timedelta(days=1)
         return boundary
 
+    @staticmethod
+    def _enrich_window(win: dict) -> dict:
+        """Acrescenta as durações formatadas a um dicionário de janela."""
+        return {
+            **win,
+            "outage_downtime_fmt": format_duration_pt(win["outage_downtime"]),
+            "flicker_downtime_fmt": format_duration_pt(win["flicker_downtime"]),
+        }
+
     def entity_windows(self, stats: EntityStats) -> dict:
         """Resumo por janela: dia anterior, últimos 7 dias e total (all-time).
 
         Cada janela traz quedas reais e flickers (contagem + downtime em s).
         """
         boundary = self._cycle_boundary(dt_util.now())
-
-        def enrich(win: dict) -> dict:
-            return {
-                **win,
-                "outage_downtime_fmt": format_duration_pt(win["outage_downtime"]),
-                "flicker_downtime_fmt": format_duration_pt(
-                    win["flicker_downtime"]
-                ),
-            }
-
         return {
-            "dia": enrich(stats.window(boundary - timedelta(days=1), boundary)),
-            "semana": enrich(
+            "dia": self._enrich_window(
+                stats.window(boundary - timedelta(days=1), boundary)
+            ),
+            "semana": self._enrich_window(
                 stats.window(boundary - timedelta(days=7), boundary)
             ),
-            "total": enrich(
+            "total": self._enrich_window(
                 {
                     "outages": stats.outage_count,
                     "outage_downtime": round(stats.total_downtime, 1),
@@ -1612,6 +1620,54 @@ class EntityMonitor:
                 }
             ),
         }
+
+    def aggregate_windows(self, entity_ids: list[str]) -> dict:
+        """Soma as janelas (dia/7d/total) de várias entidades (integração)."""
+        boundary = self._cycle_boundary(dt_util.now())
+        spans = {
+            "dia": (boundary - timedelta(days=1), boundary),
+            "semana": (boundary - timedelta(days=7), boundary),
+        }
+        out: dict = {}
+        for key, (since, until) in spans.items():
+            oc = fc = 0
+            od = fd = 0.0
+            for eid in entity_ids:
+                st = self.stats.get(eid)
+                if st is None:
+                    continue
+                w = st.window(since, until)
+                oc += w["outages"]
+                od += w["outage_downtime"]
+                fc += w["flickers"]
+                fd += w["flicker_downtime"]
+            out[key] = self._enrich_window(
+                {
+                    "outages": oc,
+                    "outage_downtime": round(od, 1),
+                    "flickers": fc,
+                    "flicker_downtime": round(fd, 1),
+                }
+            )
+        oc = fc = 0
+        od = fd = 0.0
+        for eid in entity_ids:
+            st = self.stats.get(eid)
+            if st is None:
+                continue
+            oc += st.outage_count
+            od += st.total_downtime
+            fc += st.flicker_count
+            fd += st.flicker_downtime
+        out["total"] = self._enrich_window(
+            {
+                "outages": oc,
+                "outage_downtime": round(od, 1),
+                "flickers": fc,
+                "flicker_downtime": round(fd, 1),
+            }
+        )
+        return out
 
     def build_report(self) -> dict:
         now = dt_util.utcnow()
