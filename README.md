@@ -186,6 +186,23 @@ um `kind: "snapshot"` com as entidades que estão **offline naquele momento**
 está caído, sem esperar o próximo alerta. O atraso evita reportar entidades que
 ainda estavam carregando no boot.
 
+## Flickers e janelas de tempo (relatório N3)
+
+Para facilitar o debug, quedas curtas e reinícios não poluem mais os totais:
+
+- **Flicker** = queda que se recupera **antes do `seconds_threshold`**. É
+  contabilizada **separadamente** (contador próprio), não infla o downtime das
+  quedas reais nem o N2/N3.
+- **Reinício do HA**: quedas que se recuperam nos primeiros ~60s após o boot são
+  transientes de reinício e **não contam** (nem queda, nem flicker).
+- **Janelas de tempo**: o relatório diário (N3), o sensor de relatório e o envio
+  ao central trazem, por entidade, **quedas e flickers** em três janelas:
+  **dia anterior**, **últimos 7 dias** e **total (all-time)** — alinhadas ao
+  `report_time_hour`. Assim dá pra entender o que aconteceu no último dia.
+
+Exemplo de linha do N3:
+`🔴 Luz Sala — quedas: ontem 1× (2h), 7d 2× (3h), total 4× (5h) · ⚡ flickers: ontem 2, 7d 3, total 3`
+
 ## Persistência
 
 Tudo é salvo em disco:
