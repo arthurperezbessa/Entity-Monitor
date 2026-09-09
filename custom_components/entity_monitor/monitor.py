@@ -1326,10 +1326,7 @@ class EntityMonitor:
         """
 
         def seg(win: dict) -> str:
-            return (
-                f"{win['outages']}× "
-                f"({format_duration_pt(win['outage_downtime'])})"
-            )
+            return f"{win['outages']}× ({win['outage_downtime_fmt']})"
 
         d = windows["dia"]
         w = windows["semana"]
@@ -1591,15 +1588,29 @@ class EntityMonitor:
         Cada janela traz quedas reais e flickers (contagem + downtime em s).
         """
         boundary = self._cycle_boundary(dt_util.now())
+
+        def enrich(win: dict) -> dict:
+            return {
+                **win,
+                "outage_downtime_fmt": format_duration_pt(win["outage_downtime"]),
+                "flicker_downtime_fmt": format_duration_pt(
+                    win["flicker_downtime"]
+                ),
+            }
+
         return {
-            "dia": stats.window(boundary - timedelta(days=1), boundary),
-            "semana": stats.window(boundary - timedelta(days=7), boundary),
-            "total": {
-                "outages": stats.outage_count,
-                "outage_downtime": round(stats.total_downtime, 1),
-                "flickers": stats.flicker_count,
-                "flicker_downtime": round(stats.flicker_downtime, 1),
-            },
+            "dia": enrich(stats.window(boundary - timedelta(days=1), boundary)),
+            "semana": enrich(
+                stats.window(boundary - timedelta(days=7), boundary)
+            ),
+            "total": enrich(
+                {
+                    "outages": stats.outage_count,
+                    "outage_downtime": round(stats.total_downtime, 1),
+                    "flickers": stats.flicker_count,
+                    "flicker_downtime": round(stats.flicker_downtime, 1),
+                }
+            ),
         }
 
     def build_report(self) -> dict:
