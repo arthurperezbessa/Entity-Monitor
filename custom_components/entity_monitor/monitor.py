@@ -1499,6 +1499,19 @@ class EntityMonitor:
             extra = len(eids_sorted) - len(labels)
             subject = ", ".join(labels) + (f" (+{extra})" if extra > 0 else "")
             verb = "estão" if len(eids_sorted) > 1 else "está"
+            # Agregado por integração + janelas das top-3 (para o dashboard já
+            # agrupar no boot, sem esperar o N3).
+            integration_windows = self.aggregate_windows(eids_sorted)
+            top_windows = [
+                {
+                    "entity_id": eid,
+                    "name": self._friendly_name(eid),
+                    "windows": self.entity_windows(
+                        self.stats.get(eid) or EntityStats()
+                    ),
+                }
+                for eid in top_ids
+            ]
             self._send_to_central(
                 kind=NOTIFY_SNAPSHOT,
                 integration=integration,
@@ -1510,6 +1523,8 @@ class EntityMonitor:
                 threshold_seconds=0,
                 title=f"{self._integration_name(integration)} instável",
                 message=f"{subject} {verb} offline agora.",
+                windows=top_windows,
+                integration_windows=integration_windows,
             )
 
     # -- Statistics / reporting ------------------------------------------------
