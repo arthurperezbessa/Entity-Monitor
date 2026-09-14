@@ -70,6 +70,7 @@ NOTIFY_N2 = "n2"
 NOTIFY_N3 = "n3"
 NOTIFY_TEST = "test"
 NOTIFY_SNAPSHOT = "snapshot"  # estado atual enviado ao central no boot
+NOTIFY_REFRESH = "refresh"  # sincronização diária das janelas ao central
 
 # Atraso (segundos) antes de enviar o snapshot ao central, para dar tempo das
 # entidades carregarem no boot e não reportar quedas transitórias.
