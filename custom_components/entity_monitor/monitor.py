@@ -54,6 +54,7 @@ from .const import (
     NOTIFY_N1,
     NOTIFY_N2,
     NOTIFY_N3,
+    NOTIFY_REFRESH,
     NOTIFY_SNAPSHOT,
     NOTIFY_TEST,
     PRIMARY_DOMAIN_ORDER,
@@ -1075,16 +1076,23 @@ class EntityMonitor:
     @callback
     def _on_report_tick(self, _now: datetime) -> None:
         now = dt_util.utcnow()
+        fired: set[str] = set()
         for integration in list(self._integration_state):
-            self._close_cycle(integration, now)
+            if self._close_cycle(integration, now):
+                fired.add(integration)
+        # Sincroniza o central com as janelas atuais das demais integrações
+        # (as que não dispararam N3 agora), para quedas antigas saírem da
+        # janela de 7 dias e integrações que zeraram sumirem do dashboard.
+        self._send_daily_refresh_to_central(fired)
         self._store.async_delay_save(self._data_for_storage, 5)
         async_dispatcher_send(self.hass, SIGNAL_UPDATE)
 
     @callback
-    def _close_cycle(self, integration: str, now: datetime) -> None:
+    def _close_cycle(self, integration: str, now: datetime) -> bool:
+        """Fecha o ciclo diário da integração. Retorna True se disparou N3."""
         state = self._integration_state.get(integration)
         if state is None:
-            return
+            return False
 
         # Materialise the just-ended cycle, treating still-open outages as
         # closing at this tick so their cycle contribution counts.
@@ -1094,7 +1102,7 @@ class EntityMonitor:
         ]
         bursts = list(state.cycle_bursts)
 
-        self._maybe_fire_n3(integration, bursts, closed_intervals)
+        fired = self._maybe_fire_n3(integration, bursts, closed_intervals)
 
         state.cycle_bursts = []
         state.cycle_intervals = [
@@ -1125,6 +1133,7 @@ class EntityMonitor:
 
         # Re-arm N2 if an outage is still ongoing across the boundary.
         self._reevaluate_n2_timer(integration)
+        return fired
 
     @callback
     def _maybe_fire_n3(
@@ -1132,10 +1141,13 @@ class EntityMonitor:
         integration: str,
         bursts: list[IntegrationBurst],
         intervals: list[tuple[str, datetime, datetime]],
-    ) -> None:
-        """Fire the N3 daily report if the cycle recorded any drop."""
+    ) -> bool:
+        """Fire the N3 daily report if the cycle recorded any drop.
+
+        Retorna True se um N3 foi disparado.
+        """
         if not bursts:
-            return
+            return False
 
         per_entity: dict[str, float] = {}
         for entity_id, start, end in intervals:
@@ -1144,7 +1156,7 @@ class EntityMonitor:
                 continue
             per_entity[entity_id] = per_entity.get(entity_id, 0.0) + duration
         if not per_entity:
-            return
+            return False
         ranked = [
             eid
             for eid, _ in sorted(
@@ -1158,6 +1170,7 @@ class EntityMonitor:
             per_entity_seconds=per_entity,
             outage_count=len(bursts),
         )
+        return True
 
     # -- Notification dispatch -------------------------------------------------
 
@@ -1525,6 +1538,77 @@ class EntityMonitor:
                 message=f"{subject} {verb} offline agora.",
                 windows=top_windows,
                 integration_windows=integration_windows,
+            )
+
+    @callback
+    def _send_daily_refresh_to_central(
+        self, skip: set[str] | None = None
+    ) -> None:
+        """Sincroniza o central com as janelas ATUAIS de cada integração.
+
+        Rodado no tick diário para TODA integração que já registrou quedas —
+        inclusive as sem queda recente. Assim as quedas antigas saem sozinhas
+        da janela de 7 dias e as integrações que zeraram somem do dashboard,
+        sem depender de um novo alerta N3.
+
+        É um envio silencioso (kind="refresh"): NÃO gera notificação e NÃO entra
+        no feed de alertas do central — só atualiza as janelas por integração.
+
+        'skip' são integrações que já dispararam N3 neste mesmo tick (já
+        mandaram as janelas atualizadas), para não enviar duas vezes.
+        """
+        if not self.central_enabled:
+            return
+        skip = skip or set()
+        by_integration: dict[str, list[str]] = {}
+        for eid in self.stats:
+            by_integration.setdefault(
+                self._integration_of(eid), []
+            ).append(eid)
+        for integration, eids in by_integration.items():
+            if integration in skip:
+                continue
+            agg = self.aggregate_windows(sorted(eids))
+            # Nunca houve queda no histórico atual → o central não tem entrada
+            # para esta integração; não há nada para sincronizar.
+            if int(agg["total"]["outages"]) <= 0:
+                continue
+            # Entidades com queda na SEMANA (para "N entidades" e o top-3).
+            candidates: list[tuple[float, str, dict]] = []
+            for eid in eids:
+                st = self.stats.get(eid)
+                if st is None:
+                    continue
+                ew = self.entity_windows(st)
+                if ew["semana"]["outages"] > 0:
+                    candidates.append(
+                        (ew["semana"]["outage_downtime"], eid, ew)
+                    )
+            candidates.sort(key=lambda c: c[0], reverse=True)
+            top = candidates[:3]
+            top_windows = [
+                {
+                    "entity_id": eid,
+                    "name": self._friendly_name(eid),
+                    "windows": ew,
+                }
+                for _, eid, ew in top
+            ]
+            # Se 'candidates' está vazio, a semana zerou: enviamos assim mesmo
+            # (semana.outages=0) para o central REMOVER a entrada antiga.
+            self._send_to_central(
+                kind=NOTIFY_REFRESH,
+                integration=integration,
+                integration_name=self._integration_name(integration),
+                entity_names=[self._friendly_name(eid) for _, eid, _ in top],
+                entity_seconds=[0.0 for _ in top],
+                total_affected=len(candidates),
+                outage_count=int(agg["dia"]["outages"]),
+                threshold_seconds=0,
+                title="",
+                message="",
+                windows=top_windows,
+                integration_windows=agg,
             )
 
     # -- Statistics / reporting ------------------------------------------------
