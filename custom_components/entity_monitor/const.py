@@ -69,12 +69,24 @@ NOTIFY_N1 = "n1"
 NOTIFY_N2 = "n2"
 NOTIFY_N3 = "n3"
 NOTIFY_TEST = "test"
-NOTIFY_SNAPSHOT = "snapshot"  # estado atual enviado ao central no boot
-NOTIFY_REFRESH = "refresh"  # sincronização diária das janelas ao central
+NOTIFY_STATE = "estado"  # estado completo do cliente, sincronizado ao central
 
-# Atraso (segundos) antes de enviar o snapshot ao central, para dar tempo das
-# entidades carregarem no boot e não reportar quedas transitórias.
-SNAPSHOT_DELAY_SECONDS = 60
+# Sincronização do estado completo com o central.
+# Intervalo fixo; cada cliente cai num minuto próprio dentro do intervalo
+# (derivado do client_id) para os clientes não enviarem todos juntos.
+STATE_SYNC_INTERVAL_SECONDS = 1800
+# Envio imediato após queda/recuperação: espera este tempo (agrupa eventos)...
+STATE_SYNC_DEBOUNCE_SECONDS = 60
+# ...e respeita um intervalo mínimo entre envios (entidade instável não inunda).
+STATE_SYNC_MIN_GAP_SECONDS = 300
+# Primeiro envio após o boot (depois da carência de reinício).
+STATE_SYNC_BOOT_DELAY_SECONDS = 90
+# Máximo de entidades detalhadas por envio (as piores); os totais por
+# integração sempre consideram todas.
+STATE_MAX_ENTITIES = 30
+# Janelas corridas (a partir de agora).
+WINDOW_DAY_SECONDS = 24 * 3600
+WINDOW_WEEK_SECONDS = 7 * 24 * 3600
 
 # Carência (segundos) após o boot do HA: quedas que se recuperam nesse período
 # são transientes de reinício — não contam como queda nem como flicker.

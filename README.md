@@ -174,17 +174,38 @@ Basta preencher, na configuração:
 - **`central_client_id`** — a identificação daquele cliente no central.
 - **`central_token`** — o token daquele cliente no central.
 
-Quando os três estão preenchidos, cada N1/N2/N3 (e o teste) faz um `POST` para o
-central com `tipo: "monitor"`, o `kind` (n1/n2/n3), a integração afetada, as
-entidades e a mensagem. O central valida o token e mostra num sensor de
-monitoramento por cliente. O `notify_service` continua **opcional** — deixe em
+Quando os três estão preenchidos, o central recebe dois tipos de envio (`POST`
+com `tipo: "monitor"`). O `notify_service` continua **opcional** — deixe em
 branco se quiser só o central.
 
-**Snapshot no início:** ~60s após o Entity Monitor iniciar, ele envia ao central
-um `kind: "snapshot"` com as entidades que estão **offline naquele momento**
-(agrupadas por integração). Assim o dashboard do central já nasce mostrando o que
-está caído, sem esperar o próximo alerta. O atraso evita reportar entidades que
-ainda estavam carregando no boot.
+**1. Alertas N1/N2/N3 (e o teste)** — `kind` n1/n2/n3/test, com a integração, as
+entidades e a mensagem. No central viram o **feed de alertas** do cliente.
+
+**2. Estado completo (`kind: "estado"`)** — é a **fonte do dashboard**. O central
+substitui tudo o que tinha do cliente a cada envio, então nenhum número fica
+velho. Contém, em janelas **corridas** (a partir do momento do envio):
+
+- por cliente e por integração: quedas e tempo offline nas **últimas 24h** e
+  **últimos 7 dias**, flickers à parte, quantas entidades estão **caídas agora**;
+- por entidade (as 30 piores): as mesmas janelas, se está caída agora (e desde
+  quando) e início/fim da última queda.
+
+Regras: **1 queda = 1 entidade unavailable por ≥ `seconds_threshold`**; queda
+**em andamento conta**, com o tempo offline até o momento; só entram entidades
+com queda/flicker nos últimos 7 dias ou caídas agora.
+
+Quando é enviado:
+
+- **a cada 30 min**, num minuto fixo por cliente (derivado do `central_client_id`,
+  para os clientes não enviarem todos juntos);
+- **~90s após o boot** (depois da carência de reinício);
+- **logo após uma queda confirmada ou recuperação** — espera 60s para agrupar
+  eventos e respeita no mínimo 5 min desde o último envio;
+- ao apertar o **teste de notificação**.
+
+Se o central ficar sem receber o estado de um cliente, o dashboard mostra o
+cliente como **sem contato** — sinal de que o HA do cliente (ou a internet dele)
+está fora.
 
 ## Flickers e janelas de tempo (relatório N3)
 
@@ -195,10 +216,12 @@ Para facilitar o debug, quedas curtas e reinícios não poluem mais os totais:
   quedas reais nem o N2/N3.
 - **Reinício do HA**: quedas que se recuperam nos primeiros ~60s após o boot são
   transientes de reinício e **não contam** (nem queda, nem flicker).
-- **Janelas de tempo**: o relatório diário (N3), o sensor de relatório e o envio
-  ao central trazem, por entidade, **quedas e flickers** em três janelas:
-  **dia anterior**, **últimos 7 dias** e **total (all-time)** — alinhadas ao
-  `report_time_hour`. Assim dá pra entender o que aconteceu no último dia.
+- **Janelas de tempo**: o relatório diário (N3) e o sensor de relatório trazem,
+  por entidade, **quedas e flickers** em três janelas: **dia anterior**,
+  **últimos 7 dias** e **total (all-time)** — alinhadas ao `report_time_hour`.
+  (O estado enviado ao central usa janelas **corridas** de 24h/7d — ver acima.)
+- **N2 sem repetição**: uma entidade que continua caída depois da virada do
+  ciclo e já tinha passado do limiar do N2 não gera um novo N2 a cada dia.
 
 Exemplo de linha do N3:
 `🔴 Luz Sala — quedas: ontem 1× (2h), 7d 2× (3h), total 4× (5h) · ⚡ flickers: ontem 2, 7d 3, total 3`
@@ -224,7 +247,9 @@ Dois caminhos:
   `entity_monitor.reset_all`.
 
 Reset automático: a cada `auto_reset_days` (padrão 30) os contadores
-cumulativos são zerados. `0` desliga.
+cumulativos são zerados. `0` desliga. O reset automático **preserva o histórico
+recente** (últimos dias), para as janelas de 24h/7d do central não perderem as
+quedas da semana; os resets manuais apagam tudo.
 
 ## Testar a notificação
 

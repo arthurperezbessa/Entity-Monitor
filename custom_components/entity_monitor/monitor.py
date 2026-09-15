@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import zlib
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from functools import partial
@@ -19,6 +20,7 @@ from homeassistant.helpers.event import (
     async_call_later,
     async_track_state_change_event,
     async_track_time_change,
+    async_track_utc_time_change,
 )
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
@@ -54,18 +56,23 @@ from .const import (
     NOTIFY_N1,
     NOTIFY_N2,
     NOTIFY_N3,
-    NOTIFY_REFRESH,
-    NOTIFY_SNAPSHOT,
+    NOTIFY_STATE,
     NOTIFY_TEST,
     PRIMARY_DOMAIN_ORDER,
     RESTART_GRACE_SECONDS,
     SCOPE_ENTITY,
     SCOPE_INTEGRATION,
     SIGNAL_UPDATE,
-    SNAPSHOT_DELAY_SECONDS,
     STATE_ACTIVE_TODAY,
+    STATE_MAX_ENTITIES,
     STATE_QUIET,
+    STATE_SYNC_BOOT_DELAY_SECONDS,
+    STATE_SYNC_DEBOUNCE_SECONDS,
+    STATE_SYNC_INTERVAL_SECONDS,
+    STATE_SYNC_MIN_GAP_SECONDS,
     STORAGE_VERSION,
+    WINDOW_DAY_SECONDS,
+    WINDOW_WEEK_SECONDS,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -194,6 +201,39 @@ class EntityStats:
             "flicker_downtime": fd,
         }
 
+    def rolling_window(self, since: datetime, now: datetime) -> dict:
+        """Janela corrida [since, now] para o envio de estado ao central.
+
+        Diferente de window(): conta todo registro que tocou a janela (terminou
+        depois de 'since') e soma só o tempo offline DENTRO da janela. Quedas
+        ainda em andamento não estão no histórico — quem chama soma à parte.
+        """
+        since_ts = since.timestamp()
+        now_ts = now.timestamp()
+        oc = fc = 0
+        od = fd = 0.0
+        for rec in self.history:
+            end = _parse_dt(rec.get("end"))
+            if end is None:
+                continue
+            end_ts = end.timestamp()
+            if end_ts < since_ts:
+                continue
+            dur = float(rec.get("dur", 0.0))
+            inside = max(0.0, min(end_ts, now_ts) - max(end_ts - dur, since_ts))
+            if rec.get("flicker"):
+                fc += 1
+                fd += inside
+            else:
+                oc += 1
+                od += inside
+        return {
+            "outages": oc,
+            "outage_downtime": od,
+            "flickers": fc,
+            "flicker_downtime": fd,
+        }
+
 
 @dataclass
 class IntegrationStats:
@@ -270,12 +310,17 @@ class OutageInterval:
     entity_id: str
     start: datetime
     end: datetime | None = None  # None = still ongoing in this cycle
+    # Queda que atravessou a virada do ciclo e já tinha passado do limiar do N2
+    # antes dela: não conta para o N2 do novo ciclo (evita N2 repetido todo dia
+    # para a mesma entidade que continua caída).
+    n2_exempt: bool = False
 
     def as_dict(self) -> dict:
         return {
             "entity_id": self.entity_id,
             "start": _iso(self.start),
             "end": _iso(self.end),
+            "n2_exempt": self.n2_exempt,
         }
 
     @classmethod
@@ -285,6 +330,7 @@ class OutageInterval:
             entity_id=data.get("entity_id", ""),
             start=start,
             end=_parse_dt(data.get("end")),
+            n2_exempt=bool(data.get("n2_exempt", False)),
         )
 
 
@@ -347,6 +393,9 @@ class EntityMonitor:
         self.stats: dict[str, EntityStats] = {}
         self.integration_stats: dict[str, IntegrationStats] = {}
         self._ongoing: dict[str, OngoingOutage] = {}
+        # Entidades efetivamente monitoradas (config atual); o storage pode
+        # guardar stats de entidades que saíram da configuração.
+        self._monitored_entities: list[str] = []
         self._stored_outage_starts: dict[str, datetime] = {}
         self._integration_state: dict[str, IntegrationCycleState] = {}
         self._n2_timers: dict[str, CALLBACK_TYPE] = {}
@@ -354,7 +403,11 @@ class EntityMonitor:
         self._integration_names: dict[str, str] = {}
         self._last_reset_at: datetime | None = None
         self._auto_reset_cancel: CALLBACK_TYPE | None = None
-        self._snapshot_cancel: CALLBACK_TYPE | None = None
+        # Sincronização do estado completo com o central.
+        self._state_sync_boot_cancel: CALLBACK_TYPE | None = None
+        self._state_sync_pending_cancel: CALLBACK_TYPE | None = None
+        self._unsub_state_sync_tick: CALLBACK_TYPE | None = None
+        self._last_state_sync: datetime | None = None
         # Até quando quedas contam como transiente de reinício (não contadas).
         self._grace_until: datetime | None = None
         self._unsub_report_tick: CALLBACK_TYPE | None = None
@@ -505,6 +558,7 @@ class EntityMonitor:
         )
 
         entities = self._resolved_entities()
+        self._monitored_entities = entities
         for eid in entities:
             self.stats.setdefault(eid, EntityStats())
 
@@ -535,11 +589,12 @@ class EntityMonitor:
         self._schedule_report_tick()
         self._store.async_delay_save(self._data_for_storage, 5)
 
-        # Snapshot do estado atual para o central (após um atraso, para não
-        # reportar entidades que ainda estão carregando no boot).
+        # Estado completo para o central: periódico + primeiro envio após a
+        # carência de boot (para não reportar entidades ainda carregando).
         if self.central_enabled:
-            self._snapshot_cancel = async_call_later(
-                self.hass, SNAPSHOT_DELAY_SECONDS, self._send_snapshot_to_central
+            self._schedule_state_sync()
+            self._state_sync_boot_cancel = async_call_later(
+                self.hass, STATE_SYNC_BOOT_DELAY_SECONDS, self._on_state_sync_boot
             )
 
     def _resolved_entities(self) -> list[str]:
@@ -629,9 +684,15 @@ class EntityMonitor:
         if self._auto_reset_cancel is not None:
             self._auto_reset_cancel()
             self._auto_reset_cancel = None
-        if self._snapshot_cancel is not None:
-            self._snapshot_cancel()
-            self._snapshot_cancel = None
+        for attr in (
+            "_state_sync_boot_cancel",
+            "_state_sync_pending_cancel",
+            "_unsub_state_sync_tick",
+        ):
+            cancel = getattr(self, attr)
+            if cancel is not None:
+                cancel()
+                setattr(self, attr, None)
 
     # -- State change handling -------------------------------------------------
 
@@ -804,6 +865,7 @@ class EntityMonitor:
         # The union stopped growing — usually just cancels the pending N2
         # timer if this was the last open interval.
         self._reevaluate_n2_timer(integration)
+        self._request_state_sync()
         self._store.async_delay_save(self._data_for_storage, 5)
         async_dispatcher_send(self.hass, SIGNAL_UPDATE)
 
@@ -868,6 +930,7 @@ class EntityMonitor:
         # A new confirmed drop might already cross the N2 union threshold
         # even if the outage that started it was the very last to join.
         self._reevaluate_n2_timer(integration)
+        self._request_state_sync()
         self._store.async_delay_save(self._data_for_storage, 5)
         async_dispatcher_send(self.hass, SIGNAL_UPDATE)
 
@@ -947,11 +1010,21 @@ class EntityMonitor:
     # -- N2: accumulated offline crosses threshold ----------------------------
 
     def _current_per_entity_totals(
-        self, state: IntegrationCycleState, now: datetime
+        self,
+        state: IntegrationCycleState,
+        now: datetime,
+        *,
+        for_n2: bool = False,
     ) -> dict[str, float]:
-        """Return per-entity cumulative offline seconds in the cycle so far."""
+        """Return per-entity cumulative offline seconds in the cycle so far.
+
+        Com for_n2=True ignora intervalos isentos (queda já longa que só
+        atravessou a virada do ciclo).
+        """
         per_entity_total: dict[str, float] = {}
         for iv in state.cycle_intervals:
+            if for_n2 and iv.n2_exempt:
+                continue
             end = iv.end if iv.end is not None else now
             if end <= iv.start:
                 continue
@@ -982,13 +1055,15 @@ class EntityMonitor:
             return
 
         now = dt_util.utcnow()
-        per_entity = self._current_per_entity_totals(state, now)
+        per_entity = self._current_per_entity_totals(state, now, for_n2=True)
         if per_entity and max(per_entity.values()) >= threshold_seconds:
             self._fire_n2(integration)
             return
 
         currently_offline = {
-            iv.entity_id for iv in state.cycle_intervals if iv.end is None
+            iv.entity_id
+            for iv in state.cycle_intervals
+            if iv.end is None and not iv.n2_exempt
         }
         if not currently_offline:
             return
@@ -1020,7 +1095,7 @@ class EntityMonitor:
         if threshold_seconds <= 0:
             return
         now = dt_util.utcnow()
-        per_entity = self._current_per_entity_totals(state, now)
+        per_entity = self._current_per_entity_totals(state, now, for_n2=True)
         if per_entity and max(per_entity.values()) >= threshold_seconds:
             self._fire_n2(integration)
         else:
@@ -1035,7 +1110,7 @@ class EntityMonitor:
             return
 
         now = dt_util.utcnow()
-        per_entity = self._current_per_entity_totals(state, now)
+        per_entity = self._current_per_entity_totals(state, now, for_n2=True)
         if not per_entity:
             return
 
@@ -1076,23 +1151,17 @@ class EntityMonitor:
     @callback
     def _on_report_tick(self, _now: datetime) -> None:
         now = dt_util.utcnow()
-        fired: set[str] = set()
         for integration in list(self._integration_state):
-            if self._close_cycle(integration, now):
-                fired.add(integration)
-        # Sincroniza o central com as janelas atuais das demais integrações
-        # (as que não dispararam N3 agora), para quedas antigas saírem da
-        # janela de 7 dias e integrações que zeraram sumirem do dashboard.
-        self._send_daily_refresh_to_central(fired)
+            self._close_cycle(integration, now)
         self._store.async_delay_save(self._data_for_storage, 5)
         async_dispatcher_send(self.hass, SIGNAL_UPDATE)
 
     @callback
-    def _close_cycle(self, integration: str, now: datetime) -> bool:
-        """Fecha o ciclo diário da integração. Retorna True se disparou N3."""
+    def _close_cycle(self, integration: str, now: datetime) -> None:
+        """Fecha o ciclo diário da integração (dispara o N3 se houve queda)."""
         state = self._integration_state.get(integration)
         if state is None:
-            return False
+            return
 
         # Materialise the just-ended cycle, treating still-open outages as
         # closing at this tick so their cycle contribution counts.
@@ -1102,14 +1171,32 @@ class EntityMonitor:
         ]
         bursts = list(state.cycle_bursts)
 
-        fired = self._maybe_fire_n3(integration, bursts, closed_intervals)
+        self._maybe_fire_n3(integration, bursts, closed_intervals)
 
+        # Quedas em andamento seguem para o novo ciclo. As que já passaram do
+        # limiar do N2 ficam isentas dele: já foram avisadas, não repetimos o
+        # "ficou offline hoje" todo dia enquanto a entidade continua caída.
+        threshold_seconds = self.n3_minutes_threshold * 60
+        carried: list[OutageInterval] = []
+        for iv in state.cycle_intervals:
+            if iv.end is not None:
+                continue
+            outage = self._ongoing.get(iv.entity_id)
+            already_long = (
+                outage is not None
+                and threshold_seconds > 0
+                and (now - outage.started).total_seconds() >= threshold_seconds
+            )
+            carried.append(
+                OutageInterval(
+                    entity_id=iv.entity_id,
+                    start=now,
+                    end=None,
+                    n2_exempt=iv.n2_exempt or already_long,
+                )
+            )
         state.cycle_bursts = []
-        state.cycle_intervals = [
-            OutageInterval(entity_id=iv.entity_id, start=now, end=None)
-            for iv in state.cycle_intervals
-            if iv.end is None
-        ]
+        state.cycle_intervals = carried
 
         cancel = self._n2_timers.pop(integration, None)
         if cancel is not None:
@@ -1133,7 +1220,6 @@ class EntityMonitor:
 
         # Re-arm N2 if an outage is still ongoing across the boundary.
         self._reevaluate_n2_timer(integration)
-        return fired
 
     @callback
     def _maybe_fire_n3(
@@ -1395,6 +1481,8 @@ class EntityMonitor:
             title=title,
             message=message,
         )
+        # O teste também força uma sincronização do estado (útil na instalação).
+        self._send_state_to_central()
         if not self.notify_service:
             _LOGGER.warning(
                 "Test notification requested but no notify_service is "
@@ -1484,145 +1572,284 @@ class EntityMonitor:
                 "Entity Monitor: falha ao enviar ao central: %s", err
             )
 
-    @callback
-    def _send_snapshot_to_central(self, _now: datetime | None = None) -> None:
-        """Envia o estado atual (entidades caídas agora) ao central.
+    # -- Estado completo para o central ----------------------------------------
 
-        Agrupado por integração, um alerta kind="snapshot" por integração.
+    def _state_sync_offset(self) -> int:
+        """Segundo fixo deste cliente dentro do intervalo de sincronização.
+
+        Derivado do client_id (estável entre reinícios), para os clientes se
+        espalharem pelo intervalo em vez de enviarem todos no mesmo instante.
         """
-        self._snapshot_cancel = None
-        if not self.central_enabled or not self._ongoing:
+        key = self.central_client_id or self.entry.entry_id
+        return zlib.crc32(key.encode("utf-8")) % STATE_SYNC_INTERVAL_SECONDS
+
+    @callback
+    def _schedule_state_sync(self) -> None:
+        if self._unsub_state_sync_tick is not None:
+            self._unsub_state_sync_tick()
+        offset = self._state_sync_offset()
+        interval_minutes = STATE_SYNC_INTERVAL_SECONDS // 60
+        first_minute = (offset // 60) % interval_minutes
+        self._unsub_state_sync_tick = async_track_utc_time_change(
+            self.hass,
+            self._on_state_sync_tick,
+            minute=list(range(first_minute, 60, interval_minutes)),
+            second=offset % 60,
+        )
+
+    @callback
+    def _on_state_sync_tick(self, _now: datetime) -> None:
+        self._send_state_to_central()
+
+    @callback
+    def _on_state_sync_boot(self, _now: datetime) -> None:
+        self._state_sync_boot_cancel = None
+        self._send_state_to_central()
+
+    @callback
+    def _request_state_sync(self) -> None:
+        """Antecipa o envio após uma queda/recuperação.
+
+        Agrupa eventos próximos (debounce) e respeita um intervalo mínimo desde
+        o último envio, para uma entidade instável não inundar o central.
+        """
+        if (
+            not self.central_enabled
+            or self._unsub_state_sync_tick is None  # ainda não iniciou
+            or self._state_sync_pending_cancel is not None
+            or self._state_sync_boot_cancel is not None
+        ):
             return
-        now = dt_util.utcnow()
-        by_integration: dict[str, list[str]] = {}
-        for eid in self._ongoing:
-            by_integration.setdefault(self._integration_of(eid), []).append(eid)
-        for integration, eids in by_integration.items():
-            eids_sorted = sorted(eids)
-            top_ids = eids_sorted[:3]
-            top_seconds = [
-                (now - self._ongoing[eid].started).total_seconds()
-                for eid in top_ids
-            ]
-            # "Nome (52h)" com o tempo real contínuo desde a queda.
-            labels = [
-                f"{self._friendly_name(eid)} ({format_duration_pt(sec)})"
-                for eid, sec in zip(top_ids, top_seconds)
-            ]
-            extra = len(eids_sorted) - len(labels)
-            subject = ", ".join(labels) + (f" (+{extra})" if extra > 0 else "")
-            verb = "estão" if len(eids_sorted) > 1 else "está"
-            # Agregado por integração + janelas das top-3 (para o dashboard já
-            # agrupar no boot, sem esperar o N3).
-            integration_windows = self.aggregate_windows(eids_sorted)
-            top_windows = [
-                {
-                    "entity_id": eid,
-                    "name": self._friendly_name(eid),
-                    "windows": self.entity_windows(
-                        self.stats.get(eid) or EntityStats()
-                    ),
-                }
-                for eid in top_ids
-            ]
-            self._send_to_central(
-                kind=NOTIFY_SNAPSHOT,
-                integration=integration,
-                integration_name=self._integration_name(integration),
-                entity_names=[self._friendly_name(eid) for eid in top_ids],
-                entity_seconds=[round(s, 1) for s in top_seconds],
-                total_affected=len(eids_sorted),
-                outage_count=0,
-                threshold_seconds=0,
-                title=f"{self._integration_name(integration)} instável",
-                message=f"{subject} {verb} offline agora.",
-                windows=top_windows,
-                integration_windows=integration_windows,
-            )
+        delay = float(STATE_SYNC_DEBOUNCE_SECONDS)
+        if self._last_state_sync is not None:
+            gap = (dt_util.utcnow() - self._last_state_sync).total_seconds()
+            delay = max(delay, STATE_SYNC_MIN_GAP_SECONDS - gap)
+        self._state_sync_pending_cancel = async_call_later(
+            self.hass, delay, self._on_state_sync_pending
+        )
 
     @callback
-    def _send_daily_refresh_to_central(
-        self, skip: set[str] | None = None
-    ) -> None:
-        """Sincroniza o central com as janelas ATUAIS de cada integração.
+    def _on_state_sync_pending(self, _now: datetime) -> None:
+        self._state_sync_pending_cancel = None
+        self._send_state_to_central()
 
-        Rodado no tick diário para TODA integração que já registrou quedas —
-        inclusive as sem queda recente. Assim as quedas antigas saem sozinhas
-        da janela de 7 dias e as integrações que zeraram somem do dashboard,
-        sem depender de um novo alerta N3.
-
-        É um envio silencioso (kind="refresh"): NÃO gera notificação e NÃO entra
-        no feed de alertas do central — só atualiza as janelas por integração.
-
-        'skip' são integrações que já dispararam N3 neste mesmo tick (já
-        mandaram as janelas atualizadas), para não enviar duas vezes.
-        """
+    @callback
+    def _send_state_to_central(self) -> None:
+        """Envia o estado completo (kind="estado"); o central substitui tudo."""
         if not self.central_enabled:
             return
-        skip = skip or set()
-        by_integration: dict[str, list[str]] = {}
-        for eid in self.stats:
-            by_integration.setdefault(
-                self._integration_of(eid), []
-            ).append(eid)
-        for integration, eids in by_integration.items():
-            if integration in skip:
+        if self._state_sync_pending_cancel is not None:
+            self._state_sync_pending_cancel()
+            self._state_sync_pending_cancel = None
+        self._last_state_sync = dt_util.utcnow()
+        payload = {
+            "tipo": "monitor",
+            "client_id": self.central_client_id,
+            "token": self.central_token,
+            "kind": NOTIFY_STATE,
+            "estado": self.build_central_state(),
+        }
+        self.hass.async_create_task(self._async_send_to_central(payload))
+
+    @staticmethod
+    def _state_window(win: dict) -> dict:
+        return {
+            "outages": int(win["outages"]),
+            "outage_downtime": int(round(win["outage_downtime"])),
+            "outage_downtime_fmt": format_duration_pt(win["outage_downtime"]),
+            "flickers": int(win["flickers"]),
+            "flicker_downtime": int(round(win["flicker_downtime"])),
+            "flicker_downtime_fmt": format_duration_pt(win["flicker_downtime"]),
+        }
+
+    @staticmethod
+    def _last_real_outage(
+        stats: EntityStats,
+    ) -> tuple[datetime, datetime] | None:
+        """(início, fim) da última queda real registrada no histórico."""
+        for rec in reversed(stats.history):
+            if rec.get("flicker"):
                 continue
-            agg = self.aggregate_windows(sorted(eids))
-            # Nunca houve queda no histórico atual → o central não tem entrada
-            # para esta integração; não há nada para sincronizar.
-            if int(agg["total"]["outages"]) <= 0:
+            end = _parse_dt(rec.get("end"))
+            if end is None:
                 continue
-            # Entidades com queda na SEMANA (para "N entidades" e o top-3).
-            candidates: list[tuple[float, str, dict]] = []
-            for eid in eids:
-                st = self.stats.get(eid)
-                if st is None:
-                    continue
-                ew = self.entity_windows(st)
-                if ew["semana"]["outages"] > 0:
-                    candidates.append(
-                        (ew["semana"]["outage_downtime"], eid, ew)
-                    )
-            candidates.sort(key=lambda c: c[0], reverse=True)
-            top = candidates[:3]
-            top_windows = [
+            return end - timedelta(seconds=float(rec.get("dur", 0.0))), end
+        return None
+
+    def build_central_state(self) -> dict:
+        """Estado completo do cliente em janelas CORRIDAS (24h e 7 dias).
+
+        - 1 queda = 1 entidade unavailable por >= seconds_threshold.
+        - Queda em andamento conta, com o tempo offline até agora.
+        - Flickers vêm separados.
+        - Totais (cliente e integração) consideram TODAS as entidades; o
+          detalhe por entidade é limitado às STATE_MAX_ENTITIES piores.
+        """
+        now = dt_util.utcnow()
+        since = {
+            "dia": now - timedelta(seconds=WINDOW_DAY_SECONDS),
+            "semana": now - timedelta(seconds=WINDOW_WEEK_SECONDS),
+        }
+        threshold = self.seconds_threshold
+
+        def empty() -> dict:
+            return {
+                "outages": 0,
+                "outage_downtime": 0.0,
+                "flickers": 0,
+                "flicker_downtime": 0.0,
+            }
+
+        def add(dst: dict, src: dict) -> None:
+            for key in dst:
+                dst[key] += src[key]
+
+        totals = {"dia": empty(), "semana": empty()}
+        integrations: dict[str, dict] = {}
+        rows: list[dict] = []
+        down_now = 0
+
+        for eid in self._monitored_entities:
+            integration = self._integration_of(eid)
+            agg = integrations.setdefault(
+                integration,
                 {
-                    "entity_id": eid,
-                    "name": self._friendly_name(eid),
-                    "windows": ew,
-                }
-                for _, eid, ew in top
-            ]
-            # Se 'candidates' está vazio, a semana zerou: enviamos assim mesmo
-            # (semana.outages=0) para o central REMOVER a entrada antiga.
-            self._send_to_central(
-                kind=NOTIFY_REFRESH,
-                integration=integration,
-                integration_name=self._integration_name(integration),
-                entity_names=[self._friendly_name(eid) for _, eid, _ in top],
-                entity_seconds=[0.0 for _ in top],
-                total_affected=len(candidates),
-                outage_count=int(agg["dia"]["outages"]),
-                threshold_seconds=0,
-                title="",
-                message="",
-                windows=top_windows,
-                integration_windows=agg,
+                    "monitoradas": 0,
+                    "caidas_agora": 0,
+                    "com_problema": 0,
+                    "dia": empty(),
+                    "semana": empty(),
+                },
             )
+            agg["monitoradas"] += 1
+
+            stats = self.stats.get(eid) or EntityStats()
+            wins = {
+                key: stats.rolling_window(start, now)
+                for key, start in since.items()
+            }
+            outage = self._ongoing.get(eid)
+            down_since: datetime | None = None
+            if (
+                outage is not None
+                and (now - outage.started).total_seconds() >= threshold
+            ):
+                down_since = outage.started
+                for key, start in since.items():
+                    wins[key]["outages"] += 1
+                    wins[key]["outage_downtime"] += (
+                        now - max(outage.started, start)
+                    ).total_seconds()
+
+            week = wins["semana"]
+            if down_since is None and not week["outages"] and not week["flickers"]:
+                continue
+
+            agg["com_problema"] += 1
+            if down_since is not None:
+                agg["caidas_agora"] += 1
+                down_now += 1
+            for key in since:
+                add(agg[key], wins[key])
+                add(totals[key], wins[key])
+
+            if down_since is not None:
+                last = (down_since, None)
+            else:
+                last = self._last_real_outage(stats) or (None, None)
+            rows.append(
+                {
+                    "integration": integration,
+                    "entity_id": eid,
+                    "nome": self._friendly_name(eid),
+                    "caida_agora": down_since is not None,
+                    "caida_desde": _iso(down_since),
+                    "dia": self._state_window(wins["dia"]),
+                    "semana": self._state_window(week),
+                    "ultima_queda_inicio": _iso(last[0]),
+                    "ultima_queda_fim": _iso(last[1]),
+                }
+            )
+
+        # Pior primeiro: caída agora > quedas 24h > quedas 7d > tempo 7d > flickers.
+        rows.sort(
+            key=lambda r: (
+                not r["caida_agora"],
+                -r["dia"]["outages"],
+                -r["semana"]["outages"],
+                -r["semana"]["outage_downtime"],
+                -r["semana"]["flickers"],
+                r["nome"],
+            )
+        )
+        listed = rows[:STATE_MAX_ENTITIES]
+        by_integration: dict[str, list[dict]] = {}
+        for row in listed:
+            by_integration.setdefault(row.pop("integration"), []).append(row)
+
+        integ_out: list[dict] = []
+        for integration, agg in integrations.items():
+            if not agg["com_problema"]:
+                continue
+            ents = by_integration.get(integration, [])
+            integ_out.append(
+                {
+                    "integracao": self._integration_name(integration),
+                    "slug": integration,
+                    "monitoradas": agg["monitoradas"],
+                    "caidas_agora": agg["caidas_agora"],
+                    "com_problema": agg["com_problema"],
+                    "dia": self._state_window(agg["dia"]),
+                    "semana": self._state_window(agg["semana"]),
+                    "entidades": ents,
+                    "entidades_omitidas": agg["com_problema"] - len(ents),
+                }
+            )
+        integ_out.sort(
+            key=lambda i: (
+                -i["caidas_agora"],
+                -i["dia"]["outages"],
+                -i["semana"]["outages"],
+                -i["semana"]["outage_downtime"],
+                -i["semana"]["flickers"],
+                i["integracao"],
+            )
+        )
+
+        return {
+            "versao": 1,
+            "gerado_em": _iso(now),
+            "janela_dia_horas": WINDOW_DAY_SECONDS // 3600,
+            "janela_semana_dias": WINDOW_WEEK_SECONDS // 86400,
+            "limiar_segundos": threshold,
+            "monitoradas": len(self._monitored_entities),
+            "caidas_agora": down_now,
+            "dia": self._state_window(totals["dia"]),
+            "semana": self._state_window(totals["semana"]),
+            "integracoes": integ_out,
+            "entidades_omitidas": len(rows) - len(listed),
+        }
 
     # -- Statistics / reporting ------------------------------------------------
 
     @callback
-    def async_reset_statistics(self) -> None:
+    def async_reset_statistics(self, *, keep_history: bool = False) -> None:
+        """Zera os contadores.
+
+        keep_history=True (auto-reset periódico) preserva o histórico recente
+        usado nas janelas 24h/7d do central, para o reset automático não
+        apagar quedas da última semana do dashboard.
+        """
         for eid in list(self.stats):
-            self.stats[eid] = EntityStats()
+            history = self.stats[eid].history if keep_history else []
+            self.stats[eid] = EntityStats(history=list(history))
         self.integration_stats.clear()
         self._last_reset_at = dt_util.utcnow()
         self._store.async_delay_save(self._data_for_storage, 1)
         async_dispatcher_send(self.hass, SIGNAL_UPDATE)
         _LOGGER.info("Entity Monitor statistics reset")
         self._schedule_auto_reset()
+        self._request_state_sync()
 
     @callback
     def async_reset_all(self) -> None:
@@ -1641,9 +1868,11 @@ class EntityMonitor:
         self._store.async_delay_save(self._data_for_storage, 1)
         async_dispatcher_send(self.hass, SIGNAL_UPDATE)
         _LOGGER.info("Entity Monitor full reset performed")
-        for eid in self._resolved_entities():
+        self._monitored_entities = self._resolved_entities()
+        for eid in self._monitored_entities:
             self.stats.setdefault(eid, EntityStats())
         self._schedule_auto_reset()
+        self._request_state_sync()
 
     @callback
     def _schedule_auto_reset(self) -> None:
@@ -1663,7 +1892,7 @@ class EntityMonitor:
 
         next_at = self._last_reset_at + period
         if next_at <= now:
-            self.async_reset_statistics()
+            self.async_reset_statistics(keep_history=True)
             return
 
         delay = (next_at - now).total_seconds()
@@ -1677,7 +1906,7 @@ class EntityMonitor:
         _LOGGER.info(
             "Entity Monitor auto-reset after %s days", self.auto_reset_days
         )
-        self.async_reset_statistics()
+        self.async_reset_statistics(keep_history=True)
 
     def _cycle_boundary(self, now_local: datetime) -> datetime:
         """Início do ciclo atual (último report_time_hour local <= agora)."""
