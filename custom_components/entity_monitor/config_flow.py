@@ -15,6 +15,8 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.selector import (
     BooleanSelector,
+    DeviceSelector,
+    DeviceSelectorConfig,
     EntitySelector,
     EntitySelectorConfig,
     NumberSelector,
@@ -33,6 +35,7 @@ from .const import (
     CONF_CENTRAL_URL,
     CONF_COALESCE_SECONDS,
     CONF_ENTITIES,
+    CONF_EXCLUDED_DEVICES,
     CONF_EXCLUDED_ENTITIES,
     CONF_INTEGRATIONS,
     CONF_N3_MINUTES_THRESHOLD,
@@ -89,6 +92,10 @@ def _build_schema(
                 CONF_EXCLUDED_ENTITIES,
                 default=defaults.get(CONF_EXCLUDED_ENTITIES, []),
             ): EntitySelector(EntitySelectorConfig(multiple=True)),
+            vol.Optional(
+                CONF_EXCLUDED_DEVICES,
+                default=defaults.get(CONF_EXCLUDED_DEVICES, []),
+            ): DeviceSelector(DeviceSelectorConfig(multiple=True)),
             vol.Required(
                 CONF_SECONDS_THRESHOLD,
                 default=defaults.get(
@@ -186,6 +193,7 @@ def _normalise(user_input: dict[str, Any]) -> dict[str, Any]:
         CONF_ENTITIES: user_input.get(CONF_ENTITIES, []),
         CONF_INTEGRATIONS: user_input.get(CONF_INTEGRATIONS, []),
         CONF_EXCLUDED_ENTITIES: user_input.get(CONF_EXCLUDED_ENTITIES, []),
+        CONF_EXCLUDED_DEVICES: user_input.get(CONF_EXCLUDED_DEVICES, []),
         CONF_ONLY_PRIMARY: bool(
             user_input.get(CONF_ONLY_PRIMARY, DEFAULT_ONLY_PRIMARY)
         ),

@@ -3,12 +3,13 @@
     "step": {
       "user": {
         "title": "Entity Monitor",
-        "description": "Escolha as integrações e/ou entidades para monitorar. Entidades excluídas são ignoradas por completo.",
+        "description": "Escolha as integrações e/ou entidades para monitorar. Entidades e dispositivos excluídos são ignorados por completo.",
         "data": {
           "integrations": "Integrações para monitorar (todas as entidades delas)",
           "only_primary_entity": "Monitorar só a entidade principal de cada dispositivo",
           "entities": "Entidades extras para monitorar (individuais)",
           "excluded_entities": "Entidades a ignorar",
+          "excluded_devices": "Dispositivos a ignorar (todas as entidades deles)",
           "seconds_threshold": "Confirmar queda após (segundos)",
           "coalesce_seconds": "Janela para tratar quedas simultâneas como uma (segundos)",
           "notify_service": "Serviço de notificação (ex: notify.mobile_app_xxx) - opcional",
@@ -38,6 +39,7 @@
           "only_primary_entity": "Monitorar só a entidade principal de cada dispositivo",
           "entities": "Entidades extras para monitorar (individuais)",
           "excluded_entities": "Entidades a ignorar",
+          "excluded_devices": "Dispositivos a ignorar (todas as entidades deles)",
           "seconds_threshold": "Confirmar queda após (segundos)",
           "coalesce_seconds": "Janela para tratar quedas simultâneas como uma (segundos)",
           "notify_service": "Serviço de notificação (ex: notify.mobile_app_xxx) - opcional",
