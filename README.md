@@ -40,7 +40,14 @@ um conjunto enxuto de notificações + relatório diário no horário escolhido.
    - **Entidades a ignorar** *(opcional)* — entidades a excluir do
      monitoramento, mesmo que façam parte de uma integração monitorada.
      Some completamente (sem stats, sem notificação, sem aparecer no
-     relatório).
+     relatório). Atenção: com *só a entidade principal* ligado, ignorar a
+     entidade principal de um dispositivo **promove a próxima** do mesmo
+     dispositivo — para desligar o dispositivo inteiro, use o campo abaixo.
+   - **Dispositivos a ignorar** *(opcional)* — o dispositivo sai por
+     completo: **nenhuma** entidade dele é monitorada e nenhuma é promovida
+     a principal. Vale até para entidades dele listadas em *entidades
+     extras*. Use para o dispositivo que você sabe que vive caindo (ou que
+     está desligado de propósito) e não quer mais ver no relatório.
    - **Confirmar queda após (segundos)** — padrão `30`.
    - **Janela de quedas simultâneas (segundos)** — padrão `20`.
    - **Serviço de notificação** *(opcional)* — `notify.*` que recebe os
@@ -283,6 +290,7 @@ para receber inline). Retorna ranking por entidade e por integração.
 | `only_primary_entity` | `true` | Só a entidade principal de cada device |
 | `entities` | — | Entidades avulsas extras |
 | `excluded_entities` | — | Entidades a ignorar por completo |
+| `excluded_devices` | — | Dispositivos a ignorar por completo (todas as entidades deles) |
 | `seconds_threshold` | `30` | Segundos pra confirmar uma queda |
 | `coalesce_seconds` | `20` | Janela de quedas simultâneas |
 | `n3_minutes_threshold` | `30` | Limiar N2 de offline acumulado (0 desliga N2) |

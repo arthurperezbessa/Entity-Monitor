@@ -34,6 +34,7 @@ from .const import (
     CONF_CENTRAL_URL,
     CONF_COALESCE_SECONDS,
     CONF_ENTITIES,
+    CONF_EXCLUDED_DEVICES,
     CONF_EXCLUDED_ENTITIES,
     CONF_INTEGRATIONS,
     CONF_N3_MINUTES_THRESHOLD,
@@ -430,6 +431,11 @@ class EntityMonitor:
         return set(self.entry.options.get(CONF_EXCLUDED_ENTITIES, []))
 
     @property
+    def excluded_devices(self) -> set[str]:
+        """Dispositivos ignorados por completo (todas as entidades deles)."""
+        return set(self.entry.options.get(CONF_EXCLUDED_DEVICES, []))
+
+    @property
     def only_primary_entity(self) -> bool:
         return bool(
             self.entry.options.get(CONF_ONLY_PRIMARY, DEFAULT_ONLY_PRIMARY)
@@ -601,24 +607,35 @@ class EntityMonitor:
         explicit = self.entities
         integrations = set(self.integrations)
         excluded = self.excluded_entities
+        excluded_devices = self.excluded_devices
+
+        registry = er.async_get(self.hass)
 
         ids: list[str] = []
         seen: set[str] = set()
 
+        def device_excluded(eid: str) -> bool:
+            if not excluded_devices:
+                return False
+            entry = registry.async_get(eid)
+            return entry is not None and entry.device_id in excluded_devices
+
         def add(eid: str) -> None:
-            if eid in excluded:
+            if eid in excluded or device_excluded(eid):
                 return
             if eid not in seen:
                 seen.add(eid)
                 ids.append(eid)
 
+        # Dispositivo ignorado sai por completo: nem as entidades listadas
+        # individualmente aqui escapam, e nenhuma entidade dele pode ser
+        # promovida a "principal" do dispositivo mais abaixo.
         for eid in explicit:
             add(eid)
 
         if not integrations:
             return ids
 
-        registry = er.async_get(self.hass)
         candidates = [
             entry
             for entry in registry.entities.values()
@@ -627,6 +644,7 @@ class EntityMonitor:
             and entry.disabled_by is None
             and entry.hidden_by is None
             and entry.entity_id not in excluded
+            and entry.device_id not in excluded_devices
         ]
 
         if self.only_primary_entity:

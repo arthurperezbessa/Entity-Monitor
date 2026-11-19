@@ -3,12 +3,13 @@
     "step": {
       "user": {
         "title": "Entity Monitor",
-        "description": "Pick the integrations and/or entities to watch. Excluded entities are ignored entirely.",
+        "description": "Pick the integrations and/or entities to watch. Excluded entities and devices are ignored entirely.",
         "data": {
           "integrations": "Integrations to monitor (every entity of these)",
           "only_primary_entity": "Watch only the main entity of each device",
           "entities": "Extra entities to monitor (individual)",
           "excluded_entities": "Entities to ignore",
+          "excluded_devices": "Devices to ignore (every entity of them)",
           "seconds_threshold": "Confirm an outage after (seconds)",
           "coalesce_seconds": "Window to treat simultaneous drops as one (seconds)",
           "notify_service": "Notify service (e.g. notify.mobile_app_xxx) - optional",
@@ -38,6 +39,7 @@
           "only_primary_entity": "Watch only the main entity of each device",
           "entities": "Extra entities to monitor (individual)",
           "excluded_entities": "Entities to ignore",
+          "excluded_devices": "Devices to ignore (every entity of them)",
           "seconds_threshold": "Confirm an outage after (seconds)",
           "coalesce_seconds": "Window to treat simultaneous drops as one (seconds)",
           "notify_service": "Notify service (e.g. notify.mobile_app_xxx) - optional",
