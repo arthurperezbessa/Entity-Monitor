@@ -193,9 +193,15 @@ substitui tudo o que tinha do cliente a cada envio, então nenhum número fica
 velho. Contém, em janelas **corridas** (a partir do momento do envio):
 
 - por cliente e por integração: quedas e tempo offline nas **últimas 24h** e
-  **últimos 7 dias**, flickers à parte, quantas entidades estão **caídas agora**;
+  **últimos 7 dias**, a **maior queda contínua** da janela, flickers à parte,
+  quantas entidades estão **caídas agora**;
 - por entidade (as 30 piores): as mesmas janelas, se está caída agora (e desde
-  quando) e início/fim da última queda.
+  quando) e início/fim da última queda;
+- por integração, os **piores das últimas 24h** (`pior_queda_24h` e
+  `pior_flicker_24h`): a entidade que mais tempo ficou fora (com a maior queda
+  contínua e o número de quedas) e a que mais deu flicker. Esses dois são
+  calculados sobre **todas** as entidades da integração, não só as 30
+  detalhadas — é o que o central usa no resumo diário por cliente.
 
 Regras: **1 queda = 1 entidade unavailable por ≥ `seconds_threshold`**; queda
 **em andamento conta**, com o tempo offline até o momento; só entram entidades

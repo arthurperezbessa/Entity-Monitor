@@ -213,6 +213,7 @@ class EntityStats:
         now_ts = now.timestamp()
         oc = fc = 0
         od = fd = 0.0
+        longest = 0.0
         for rec in self.history:
             end = _parse_dt(rec.get("end"))
             if end is None:
@@ -228,9 +229,13 @@ class EntityStats:
             else:
                 oc += 1
                 od += inside
+                # Maior queda CONTÍNUA dentro da janela (não a soma): é o que
+                # o central usa para o corte do resumo diário.
+                longest = max(longest, inside)
         return {
             "outages": oc,
             "outage_downtime": od,
+            "longest_outage": longest,
             "flickers": fc,
             "flicker_downtime": fd,
         }
@@ -1675,6 +1680,11 @@ class EntityMonitor:
             "outages": int(win["outages"]),
             "outage_downtime": int(round(win["outage_downtime"])),
             "outage_downtime_fmt": format_duration_pt(win["outage_downtime"]),
+            # Maior queda contínua da janela (não a soma).
+            "longest_outage": int(round(win.get("longest_outage", 0.0))),
+            "longest_outage_fmt": format_duration_pt(
+                win.get("longest_outage", 0.0)
+            ),
             "flickers": int(win["flickers"]),
             "flicker_downtime": int(round(win["flicker_downtime"])),
             "flicker_downtime_fmt": format_duration_pt(win["flicker_downtime"]),
@@ -1714,18 +1724,27 @@ class EntityMonitor:
             return {
                 "outages": 0,
                 "outage_downtime": 0.0,
+                "longest_outage": 0.0,
                 "flickers": 0,
                 "flicker_downtime": 0.0,
             }
 
         def add(dst: dict, src: dict) -> None:
             for key in dst:
-                dst[key] += src[key]
+                # A maior queda de um grupo é a maior das suas entidades, e
+                # não a soma delas.
+                if key == "longest_outage":
+                    dst[key] = max(dst[key], src[key])
+                else:
+                    dst[key] += src[key]
 
         totals = {"dia": empty(), "semana": empty()}
         integrations: dict[str, dict] = {}
         rows: list[dict] = []
         down_now = 0
+        # Piores da janela de 24h por integração, calculados sobre TODAS as
+        # entidades (o detalhe enviado é limitado às STATE_MAX_ENTITIES).
+        worst: dict[str, dict] = {}
 
         for eid in self._monitored_entities:
             integration = self._integration_of(eid)
@@ -1754,10 +1773,14 @@ class EntityMonitor:
             ):
                 down_since = outage.started
                 for key, start in since.items():
-                    wins[key]["outages"] += 1
-                    wins[key]["outage_downtime"] += (
+                    ongoing_inside = (
                         now - max(outage.started, start)
                     ).total_seconds()
+                    wins[key]["outages"] += 1
+                    wins[key]["outage_downtime"] += ongoing_inside
+                    wins[key]["longest_outage"] = max(
+                        wins[key]["longest_outage"], ongoing_inside
+                    )
 
             week = wins["semana"]
             if down_since is None and not week["outages"] and not week["flickers"]:
@@ -1770,6 +1793,31 @@ class EntityMonitor:
             for key in since:
                 add(agg[key], wins[key])
                 add(totals[key], wins[key])
+
+            dia = wins["dia"]
+            w = worst.setdefault(integration, {"queda": None, "flicker": None})
+            nome = self._friendly_name(eid)
+            if dia["outage_downtime"] > 0:
+                cand = {
+                    "entity_id": eid,
+                    "nome": nome,
+                    "tempo_fora": dia["outage_downtime"],
+                    "maior_queda": dia["longest_outage"],
+                    "quedas": dia["outages"],
+                    "caida_agora": down_since is not None,
+                }
+                atual = w["queda"]
+                if atual is None or cand["tempo_fora"] > atual["tempo_fora"]:
+                    w["queda"] = cand
+            if dia["flickers"] > 0:
+                cand = {
+                    "entity_id": eid,
+                    "nome": nome,
+                    "flickers": dia["flickers"],
+                }
+                atual = w["flicker"]
+                if atual is None or cand["flickers"] > atual["flickers"]:
+                    w["flicker"] = cand
 
             if down_since is not None:
                 last = (down_since, None)
@@ -1789,14 +1837,17 @@ class EntityMonitor:
                 }
             )
 
-        # Pior primeiro: caída agora > quedas 24h > quedas 7d > tempo 7d > flickers.
+        # Pior primeiro: caída agora > tempo fora 24h > maior queda 24h >
+        # quedas 24h > flickers 24h > tempo 7d > quedas 7d.
         rows.sort(
             key=lambda r: (
                 not r["caida_agora"],
+                -r["dia"]["outage_downtime"],
+                -r["dia"]["longest_outage"],
                 -r["dia"]["outages"],
-                -r["semana"]["outages"],
+                -r["dia"]["flickers"],
                 -r["semana"]["outage_downtime"],
-                -r["semana"]["flickers"],
+                -r["semana"]["outages"],
                 r["nome"],
             )
         )
@@ -1810,6 +1861,20 @@ class EntityMonitor:
             if not agg["com_problema"]:
                 continue
             ents = by_integration.get(integration, [])
+            w = worst.get(integration) or {}
+            pior_queda = w.get("queda")
+            if pior_queda is not None:
+                pior_queda = {
+                    **pior_queda,
+                    "tempo_fora": int(round(pior_queda["tempo_fora"])),
+                    "tempo_fora_fmt": format_duration_pt(
+                        pior_queda["tempo_fora"]
+                    ),
+                    "maior_queda": int(round(pior_queda["maior_queda"])),
+                    "maior_queda_fmt": format_duration_pt(
+                        pior_queda["maior_queda"]
+                    ),
+                }
             integ_out.append(
                 {
                     "integracao": self._integration_name(integration),
@@ -1819,6 +1884,10 @@ class EntityMonitor:
                     "com_problema": agg["com_problema"],
                     "dia": self._state_window(agg["dia"]),
                     "semana": self._state_window(agg["semana"]),
+                    # Piores das últimas 24h, sobre TODAS as entidades da
+                    # integração — o resumo diário do central usa estes.
+                    "pior_queda_24h": pior_queda,
+                    "pior_flicker_24h": w.get("flicker"),
                     "entidades": ents,
                     "entidades_omitidas": agg["com_problema"] - len(ents),
                 }
@@ -1835,7 +1904,9 @@ class EntityMonitor:
         )
 
         return {
-            "versao": 1,
+            # 2: janelas trazem longest_outage e integrações trazem
+            # pior_queda_24h / pior_flicker_24h.
+            "versao": 2,
             "gerado_em": _iso(now),
             "janela_dia_horas": WINDOW_DAY_SECONDS // 3600,
             "janela_semana_dias": WINDOW_WEEK_SECONDS // 86400,
