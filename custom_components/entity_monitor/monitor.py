@@ -1525,6 +1525,23 @@ class EntityMonitor:
             domain, name = service.split(".", 1)
         else:
             domain, name = "notify", service
+        # notify.notify entrega a TODOS os dispositivos registrados — nunca
+        # dispara por engano (ex.: nome do serviço digitado pela metade).
+        if (domain, name) == ("notify", "notify"):
+            _LOGGER.warning(
+                "Entity Monitor: notify.notify envia para todos os "
+                "dispositivos; configure o serviço do destinatário. "
+                "Notificação não enviada."
+            )
+            return
+        if not self.hass.services.has_service(domain, name):
+            _LOGGER.warning(
+                "Entity Monitor: serviço de notificação %s.%s não existe — "
+                "notificação não enviada",
+                domain,
+                name,
+            )
+            return
         self.hass.async_create_task(
             self.hass.services.async_call(
                 domain,

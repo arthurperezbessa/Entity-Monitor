@@ -23,7 +23,9 @@
       }
     },
     "error": {
-      "nothing_selected": "Pick at least one integration or one entity."
+      "nothing_selected": "Pick at least one integration or one entity.",
+      "notify_all": "Use the recipient's service (e.g. notify.mobile_app_phone). Plain 'notify' sends to EVERY device in Home Assistant.",
+      "invalid_notify_service": "Invalid service name. Use notify.mobile_app_xxx (or leave empty for no phone notification)."
     },
     "abort": {
       "single_instance_allowed": "Entity Monitor is already configured."
@@ -53,7 +55,9 @@
       }
     },
     "error": {
-      "nothing_selected": "Pick at least one integration or one entity."
+      "nothing_selected": "Pick at least one integration or one entity.",
+      "notify_all": "Use the recipient's service (e.g. notify.mobile_app_phone). Plain 'notify' sends to EVERY device in Home Assistant.",
+      "invalid_notify_service": "Invalid service name. Use notify.mobile_app_xxx (or leave empty for no phone notification)."
     }
   },
   "services": {
