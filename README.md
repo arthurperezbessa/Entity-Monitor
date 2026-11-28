@@ -51,7 +51,11 @@ um conjunto enxuto de notificações + relatório diário no horário escolhido.
    - **Confirmar queda após (segundos)** — padrão `30`.
    - **Janela de quedas simultâneas (segundos)** — padrão `20`.
    - **Serviço de notificação** *(opcional)* — `notify.*` que recebe os
-     avisos.
+     avisos. **Deixe em branco** para não notificar no celular (útil quando
+     os alertas vão só para o HA central): limpe o campo e salve. Não use
+     `notify` nem `notify.notify` — eles entregam a **todos** os dispositivos
+     registrados no Home Assistant, inclusive os do cliente; o formulário
+     recusa esses dois valores.
    - **Limiar N2 (minutos)** — quando o **tempo acumulado offline** da
      integração no dia (união das quedas) cruza esse valor, dispara o N2.
      Padrão `30`. `0` desliga N2.

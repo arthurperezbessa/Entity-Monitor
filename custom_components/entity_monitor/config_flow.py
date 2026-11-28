@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import voluptuous as vol
@@ -54,10 +55,28 @@ from .const import (
 )
 
 
+# "notify.mobile_app_xxx" ou só "mobile_app_xxx" (domínio notify implícito).
+NOTIFY_SERVICE_RE = re.compile(r"^[a-z0-9_]+(\.[a-z0-9_]+)?$")
+
+
 def _available_integrations(hass: HomeAssistant) -> list[str]:
     """Return platforms that currently have entities registered."""
     registry = er.async_get(hass)
     return sorted({entry.platform for entry in registry.entities.values()})
+
+
+def _suggest(defaults: dict[str, Any], key: str, empty: Any) -> dict:
+    """Pré-preenche um campo opcional SEM reinjetar o valor ao limpá-lo.
+
+    Com `default=valor_atual`, limpar o campo no formulário faz o frontend
+    omitir a chave e o voluptuous repor o valor antigo — ou seja, não havia
+    como apagar um serviço de notificação já configurado. `suggested_value`
+    preenche a tela, mas deixa o campo ser esvaziado de verdade.
+    """
+    return {
+        "description": {"suggested_value": defaults.get(key, empty)},
+        "default": empty,
+    }
 
 
 def _build_schema(
@@ -68,8 +87,7 @@ def _build_schema(
     return vol.Schema(
         {
             vol.Optional(
-                CONF_INTEGRATIONS,
-                default=defaults.get(CONF_INTEGRATIONS, []),
+                CONF_INTEGRATIONS, **_suggest(defaults, CONF_INTEGRATIONS, [])
             ): SelectSelector(
                 SelectSelectorConfig(
                     options=integrations,
@@ -85,16 +103,15 @@ def _build_schema(
                 ),
             ): BooleanSelector(),
             vol.Optional(
-                CONF_ENTITIES,
-                default=defaults.get(CONF_ENTITIES, []),
+                CONF_ENTITIES, **_suggest(defaults, CONF_ENTITIES, [])
             ): EntitySelector(EntitySelectorConfig(multiple=True)),
             vol.Optional(
                 CONF_EXCLUDED_ENTITIES,
-                default=defaults.get(CONF_EXCLUDED_ENTITIES, []),
+                **_suggest(defaults, CONF_EXCLUDED_ENTITIES, []),
             ): EntitySelector(EntitySelectorConfig(multiple=True)),
             vol.Optional(
                 CONF_EXCLUDED_DEVICES,
-                default=defaults.get(CONF_EXCLUDED_DEVICES, []),
+                **_suggest(defaults, CONF_EXCLUDED_DEVICES, []),
             ): DeviceSelector(DeviceSelectorConfig(multiple=True)),
             vol.Required(
                 CONF_SECONDS_THRESHOLD,
@@ -125,20 +142,16 @@ def _build_schema(
                 )
             ),
             vol.Optional(
-                CONF_NOTIFY_SERVICE,
-                default=defaults.get(CONF_NOTIFY_SERVICE, ""),
+                CONF_NOTIFY_SERVICE, **_suggest(defaults, CONF_NOTIFY_SERVICE, "")
             ): TextSelector(),
             vol.Optional(
-                CONF_CENTRAL_URL,
-                default=defaults.get(CONF_CENTRAL_URL, ""),
+                CONF_CENTRAL_URL, **_suggest(defaults, CONF_CENTRAL_URL, "")
             ): TextSelector(),
             vol.Optional(
-                CONF_CENTRAL_CLIENT_ID,
-                default=defaults.get(CONF_CENTRAL_CLIENT_ID, ""),
+                CONF_CENTRAL_CLIENT_ID, **_suggest(defaults, CONF_CENTRAL_CLIENT_ID, "")
             ): TextSelector(),
             vol.Optional(
-                CONF_CENTRAL_TOKEN,
-                default=defaults.get(CONF_CENTRAL_TOKEN, ""),
+                CONF_CENTRAL_TOKEN, **_suggest(defaults, CONF_CENTRAL_TOKEN, "")
             ): TextSelector(),
             vol.Required(
                 CONF_N3_MINUTES_THRESHOLD,
@@ -221,6 +234,15 @@ def _validate(user_input: dict[str, Any]) -> dict[str, str]:
         CONF_INTEGRATIONS
     ):
         return {"base": "nothing_selected"}
+
+    service = str(user_input.get(CONF_NOTIFY_SERVICE, "")).strip()
+    if service:
+        # "notify" / "notify.notify" dispara para TODOS os dispositivos
+        # registrados no Home Assistant — inclusive os do cliente.
+        if service.lower() in ("notify", "notify.notify"):
+            return {CONF_NOTIFY_SERVICE: "notify_all"}
+        if not NOTIFY_SERVICE_RE.match(service):
+            return {CONF_NOTIFY_SERVICE: "invalid_notify_service"}
     return {}
 
 

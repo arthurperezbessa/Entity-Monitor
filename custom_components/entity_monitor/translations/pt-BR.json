@@ -23,7 +23,9 @@
       }
     },
     "error": {
-      "nothing_selected": "Escolha pelo menos uma integração ou uma entidade."
+      "nothing_selected": "Escolha pelo menos uma integração ou uma entidade.",
+      "notify_all": "Use o serviço do destinatário (ex.: notify.mobile_app_celular). 'notify' sozinho envia para TODOS os dispositivos do Home Assistant.",
+      "invalid_notify_service": "Nome de serviço inválido. Use notify.mobile_app_xxx (ou deixe em branco para não notificar no celular)."
     },
     "abort": {
       "single_instance_allowed": "O Entity Monitor já está configurado."
@@ -53,7 +55,9 @@
       }
     },
     "error": {
-      "nothing_selected": "Escolha pelo menos uma integração ou uma entidade."
+      "nothing_selected": "Escolha pelo menos uma integração ou uma entidade.",
+      "notify_all": "Use o serviço do destinatário (ex.: notify.mobile_app_celular). 'notify' sozinho envia para TODOS os dispositivos do Home Assistant.",
+      "invalid_notify_service": "Nome de serviço inválido. Use notify.mobile_app_xxx (ou deixe em branco para não notificar no celular)."
     }
   },
   "services": {
